@@ -29,15 +29,15 @@
 #ifndef ASTRALOG_BATCH_ACCUMULATOR_HPP
 #define ASTRALOG_BATCH_ACCUMULATOR_HPP
 
-#include <cstddef>
 #include <chrono>
+#include <cstddef>
+#include <filesystem>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <sstream>
 #include <string>
 #include <vector>
-#include <filesystem>
 
 #include "types.hpp"
 
@@ -49,22 +49,27 @@ namespace astralog {
 
 /// Batch flushing strategy
 enum class BatchStrategy : uint8_t {
-    COUNT = 0,   ///< Flush every N valid records
-    TIME  = 1    ///< Flush every N milliseconds of wall-clock time
+  COUNT = 0, ///< Flush every N valid records
+  TIME = 1   ///< Flush every N milliseconds of wall-clock time
 };
 
-inline const char* strategy_to_string(BatchStrategy s) noexcept {
-    switch (s) {
-        case BatchStrategy::COUNT: return "COUNT";
-        case BatchStrategy::TIME:  return "TIME";
-        default:                   return "UNKNOWN";
-    }
+inline const char *strategy_to_string(BatchStrategy s) noexcept {
+  switch (s) {
+  case BatchStrategy::COUNT:
+    return "COUNT";
+  case BatchStrategy::TIME:
+    return "TIME";
+  default:
+    return "UNKNOWN";
+  }
 }
 
-inline BatchStrategy string_to_strategy(const std::string& s) {
-    if (s == "count" || s == "COUNT") return BatchStrategy::COUNT;
-    if (s == "time"  || s == "TIME")  return BatchStrategy::TIME;
-    throw std::invalid_argument("Unknown batch strategy: " + s);
+inline BatchStrategy string_to_strategy(const std::string &s) {
+  if (s == "count" || s == "COUNT")
+    return BatchStrategy::COUNT;
+  if (s == "time" || s == "TIME")
+    return BatchStrategy::TIME;
+  throw std::invalid_argument("Unknown batch strategy: " + s);
 }
 
 // ===========================================================================
@@ -76,17 +81,14 @@ inline BatchStrategy string_to_strategy(const std::string& s) {
  * @brief Configuration for the batch accumulator.
  */
 struct BatchConfig {
-    BatchStrategy strategy;           ///< COUNT or TIME
-    size_t        count_threshold;    ///< For COUNT: flush every N valid records
-    double        time_threshold_ms;  ///< For TIME: flush every N ms
-    std::string   batch_output_dir;   ///< Where to write .txt batch audit files
+  BatchStrategy strategy;       ///< COUNT or TIME
+  size_t count_threshold;       ///< For COUNT: flush every N valid records
+  double time_threshold_ms;     ///< For TIME: flush every N ms
+  std::string batch_output_dir; ///< Where to write .txt batch audit files
 
-    BatchConfig()
-        : strategy(BatchStrategy::COUNT)
-        , count_threshold(1000)
-        , time_threshold_ms(5000.0)
-        , batch_output_dir("output/batches")
-    {}
+  BatchConfig()
+      : strategy(BatchStrategy::COUNT), count_threshold(1000),
+        time_threshold_ms(5000.0), batch_output_dir("output/batches") {}
 };
 
 // ===========================================================================
@@ -113,184 +115,177 @@ struct BatchConfig {
  */
 class BatchAccumulator {
 public:
-    explicit BatchAccumulator(const BatchConfig& config)
-        : config_(config)
-        , batch_number_(0)
-        , batch_start_time_(std::chrono::steady_clock::now())
-    {
-        buffer_.reserve(config.count_threshold > 0 ? config.count_threshold : 1000);
+  explicit BatchAccumulator(const BatchConfig &config)
+      : config_(config), batch_number_(0),
+        batch_start_time_(std::chrono::steady_clock::now()) {
+    buffer_.reserve(config.count_threshold > 0 ? config.count_threshold : 1000);
+  }
+
+  /**
+   * @brief Push one valid record into the accumulator buffer.
+   */
+  void add_record(ParsedRecord rec) { buffer_.push_back(std::move(rec)); }
+
+  /**
+   * @brief Check if the flush threshold has been met.
+   *
+   * For COUNT: true when buffer size >= count_threshold.
+   * For TIME:  true when wall-clock elapsed >= time_threshold_ms.
+   */
+  bool should_flush() const {
+    if (buffer_.empty())
+      return false;
+
+    switch (config_.strategy) {
+    case BatchStrategy::COUNT:
+      return buffer_.size() >= config_.count_threshold;
+
+    case BatchStrategy::TIME: {
+      // here we need to understand what they mean by time (the one from the
+      // timestamp or like below)
+      auto now = std::chrono::steady_clock::now();
+      double elapsed_ms =
+          std::chrono::duration<double, std::milli>(now - batch_start_time_)
+              .count();
+      return elapsed_ms >= config_.time_threshold_ms;
     }
 
-    /**
-     * @brief Push one valid record into the accumulator buffer.
-     */
-    void add_record(ParsedRecord rec) {
-        buffer_.push_back(std::move(rec));
+    default:
+      return false;
     }
+  }
 
-    /**
-     * @brief Check if the flush threshold has been met.
-     *
-     * For COUNT: true when buffer size >= count_threshold.
-     * For TIME:  true when wall-clock elapsed >= time_threshold_ms.
-     */
-    bool should_flush() const {
-        if (buffer_.empty()) return false;
+  /**
+   * @brief Flush the current buffer: return records and write audit file.
+   *
+   * Resets the internal buffer and timer for the next batch.
+   *
+   * @return Vector of ParsedRecord that were in the buffer
+   */
+  std::vector<ParsedRecord> flush() {
+    ++batch_number_;
 
-        switch (config_.strategy) {
-            case BatchStrategy::COUNT:
-                return buffer_.size() >= config_.count_threshold;
+    std::vector<ParsedRecord> batch;
+    batch.swap(buffer_);
 
-            case BatchStrategy::TIME: {
-                auto now = std::chrono::steady_clock::now();
-                double elapsed_ms = std::chrono::duration<double, std::milli>(
-                    now - batch_start_time_).count();
-                return elapsed_ms >= config_.time_threshold_ms;
-            }
+    // Write audit file
+    write_batch_file(batch);
 
-            default:
-                return false;
-        }
-    }
+    // Reset timer for next batch (TIME strategy)
+    batch_start_time_ = std::chrono::steady_clock::now();
 
-    /**
-     * @brief Flush the current buffer: return records and write audit file.
-     *
-     * Resets the internal buffer and timer for the next batch.
-     *
-     * @return Vector of ParsedRecord that were in the buffer
-     */
-    std::vector<ParsedRecord> flush() {
-        ++batch_number_;
+    // Re-reserve buffer for next batch
+    buffer_.reserve(config_.count_threshold > 0 ? config_.count_threshold
+                                                : 1000);
 
-        std::vector<ParsedRecord> batch;
-        batch.swap(buffer_);
+    return batch;
+  }
 
-        // Write audit file
-        write_batch_file(batch);
+  /**
+   * @brief Flush any remaining records (final partial batch at end-of-file).
+   *
+   * @return Vector of remaining ParsedRecord (may be empty)
+   */
+  std::vector<ParsedRecord> flush_remaining() {
+    if (buffer_.empty())
+      return {};
+    return flush();
+  }
 
-        // Reset timer for next batch (TIME strategy)
-        batch_start_time_ = std::chrono::steady_clock::now();
+  /**
+   * @brief How many batches have been flushed so far.
+   */
+  int batch_count() const noexcept { return batch_number_; }
 
-        // Re-reserve buffer for next batch
-        buffer_.reserve(config_.count_threshold > 0 ? config_.count_threshold : 1000);
+  /**
+   * @brief How many records are currently buffered (not yet flushed).
+   */
+  size_t buffered_count() const noexcept { return buffer_.size(); }
 
-        return batch;
-    }
-
-    /**
-     * @brief Flush any remaining records (final partial batch at end-of-file).
-     *
-     * @return Vector of remaining ParsedRecord (may be empty)
-     */
-    std::vector<ParsedRecord> flush_remaining() {
-        if (buffer_.empty()) return {};
-        return flush();
-    }
-
-    /**
-     * @brief How many batches have been flushed so far.
-     */
-    int batch_count() const noexcept {
-        return batch_number_;
-    }
-
-    /**
-     * @brief How many records are currently buffered (not yet flushed).
-     */
-    size_t buffered_count() const noexcept {
-        return buffer_.size();
-    }
-
-    /**
-     * @brief Get the batch configuration.
-     */
-    const BatchConfig& config() const noexcept {
-        return config_;
-    }
+  /**
+   * @brief Get the batch configuration.
+   */
+  const BatchConfig &config() const noexcept { return config_; }
 
 private:
-    BatchConfig                config_;
-    std::vector<ParsedRecord>  buffer_;
-    int                        batch_number_;
-    std::chrono::steady_clock::time_point batch_start_time_;
+  BatchConfig config_;
+  std::vector<ParsedRecord> buffer_;
+  int batch_number_;
+  std::chrono::steady_clock::time_point batch_start_time_;
 
-    /**
-     * @brief Write a batch audit file to disk.
-     *
-     * File format:
-     *   # Batch NNN | Strategy: COUNT | Size: XXXX records
-     *   # Flushed at: YYYY-MM-DDTHH:MM:SSZ
-     *   timestamp,sensor_id,value
-     *   2025-11-15T12:00:00Z,TEMP-01,25.5
-     *   ...
-     */
-    void write_batch_file(const std::vector<ParsedRecord>& batch) {
-        namespace fs = std::filesystem;
+  /**
+   * @brief Write a batch audit file to disk.
+   *
+   * File format:
+   *   # Batch NNN | Strategy: COUNT | Size: XXXX records
+   *   # Flushed at: YYYY-MM-DDTHH:MM:SSZ
+   *   timestamp,sensor_id,value
+   *   2025-11-15T12:00:00Z,TEMP-01,25.5
+   *   ...
+   */
+  void write_batch_file(const std::vector<ParsedRecord> &batch) {
+    namespace fs = std::filesystem;
 
-        try {
-            fs::create_directories(config_.batch_output_dir);
-        } catch (const std::exception& e) {
-            std::cerr << "[batch] WARNING: cannot create batch output dir: "
-                      << e.what() << "\n";
-            return;
-        }
+    try {
+      fs::create_directories(config_.batch_output_dir);
+    } catch (const std::exception &e) {
+      std::cerr << "[batch] WARNING: cannot create batch output dir: "
+                << e.what() << "\n";
+      return;
+    }
 
-        // Build filename: batch_001_20251115_120000.txt
-        auto now = std::chrono::system_clock::now();
-        auto now_t = std::chrono::system_clock::to_time_t(now);
-        std::tm tm_buf{};
+    // Build filename: batch_001_20251115_120000.txt
+    auto now = std::chrono::system_clock::now();
+    auto now_t = std::chrono::system_clock::to_time_t(now);
+    std::tm tm_buf{};
 #if defined(_WIN32)
-        gmtime_s(&tm_buf, &now_t);
+    gmtime_s(&tm_buf, &now_t);
 #else
-        gmtime_r(&now_t, &tm_buf);
+    gmtime_r(&now_t, &tm_buf);
 #endif
 
-        std::ostringstream fname;
-        fname << "batch_"
-              << std::setfill('0') << std::setw(3) << batch_number_
-              << "_"
-              << std::setfill('0') << std::setw(4) << (tm_buf.tm_year + 1900)
-              << std::setfill('0') << std::setw(2) << (tm_buf.tm_mon + 1)
-              << std::setfill('0') << std::setw(2) << tm_buf.tm_mday
-              << "_"
-              << std::setfill('0') << std::setw(2) << tm_buf.tm_hour
-              << std::setfill('0') << std::setw(2) << tm_buf.tm_min
-              << std::setfill('0') << std::setw(2) << tm_buf.tm_sec
-              << ".txt";
+    std::ostringstream fname;
+    fname << "batch_" << std::setfill('0') << std::setw(3) << batch_number_
+          << "_" << std::setfill('0') << std::setw(4) << (tm_buf.tm_year + 1900)
+          << std::setfill('0') << std::setw(2) << (tm_buf.tm_mon + 1)
+          << std::setfill('0') << std::setw(2) << tm_buf.tm_mday << "_"
+          << std::setfill('0') << std::setw(2) << tm_buf.tm_hour
+          << std::setfill('0') << std::setw(2) << tm_buf.tm_min
+          << std::setfill('0') << std::setw(2) << tm_buf.tm_sec << ".txt";
 
-        std::string filepath = (fs::path(config_.batch_output_dir) / fname.str()).string();
+    std::string filepath =
+        (fs::path(config_.batch_output_dir) / fname.str()).string();
 
-        std::ofstream ofs(filepath, std::ios::out | std::ios::trunc);
-        if (!ofs.is_open()) {
-            std::cerr << "[batch] WARNING: cannot open batch file: "
-                      << filepath << "\n";
-            return;
-        }
-
-        // Header comments
-        ofs << "# Batch " << std::setfill('0') << std::setw(3) << batch_number_
-            << " | Strategy: " << strategy_to_string(config_.strategy)
-            << " | Size: " << batch.size() << " records\n";
-
-        ofs << "# Flushed at: "
-            << std::setfill('0') << std::setw(4) << (tm_buf.tm_year + 1900) << "-"
-            << std::setfill('0') << std::setw(2) << (tm_buf.tm_mon + 1) << "-"
-            << std::setfill('0') << std::setw(2) << tm_buf.tm_mday << "T"
-            << std::setfill('0') << std::setw(2) << tm_buf.tm_hour << ":"
-            << std::setfill('0') << std::setw(2) << tm_buf.tm_min << ":"
-            << std::setfill('0') << std::setw(2) << tm_buf.tm_sec << "Z\n";
-
-        // CSV header
-        ofs << "timestamp,sensor_id,value\n";
-
-        // Data rows
-        for (const auto& rec : batch) {
-            ofs << rec.timestamp << "," << rec.sensor_id << "," << rec.value << "\n";
-        }
-
-        ofs.close();
+    std::ofstream ofs(filepath, std::ios::out | std::ios::trunc);
+    if (!ofs.is_open()) {
+      std::cerr << "[batch] WARNING: cannot open batch file: " << filepath
+                << "\n";
+      return;
     }
+
+    // Header comments
+    ofs << "# Batch " << std::setfill('0') << std::setw(3) << batch_number_
+        << " | Strategy: " << strategy_to_string(config_.strategy)
+        << " | Size: " << batch.size() << " records\n";
+
+    ofs << "# Flushed at: " << std::setfill('0') << std::setw(4)
+        << (tm_buf.tm_year + 1900) << "-" << std::setfill('0') << std::setw(2)
+        << (tm_buf.tm_mon + 1) << "-" << std::setfill('0') << std::setw(2)
+        << tm_buf.tm_mday << "T" << std::setfill('0') << std::setw(2)
+        << tm_buf.tm_hour << ":" << std::setfill('0') << std::setw(2)
+        << tm_buf.tm_min << ":" << std::setfill('0') << std::setw(2)
+        << tm_buf.tm_sec << "Z\n";
+
+    // CSV header
+    ofs << "timestamp,sensor_id,value\n";
+
+    // Data rows
+    for (const auto &rec : batch) {
+      ofs << rec.timestamp << "," << rec.sensor_id << "," << rec.value << "\n";
+    }
+
+    ofs.close();
+  }
 };
 
 } // namespace astralog

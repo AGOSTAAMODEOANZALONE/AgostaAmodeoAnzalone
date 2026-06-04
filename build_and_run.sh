@@ -32,7 +32,7 @@ cd ..
 
 echo "[run] Executing AstraLog-HPC single-node engine..."
 ./build/bin/astralog_processing \
-    --csv input/telemetry/export_sat_alpha_small.csv \
+    --csv input/telemetry/export_sat_alpha_small_fixed.csv \
     --rules input/rules_SAT_ALPHA.json \
     --sensors input/sensors_SAT_ALPHA.yaml \
     --output-dir output/
