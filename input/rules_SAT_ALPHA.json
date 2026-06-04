@@ -1,0 +1,171 @@
+[
+    {
+        "rule_id": "R001",
+        "type": "stateful",
+        "sensor_id": "FLOW-006",
+        "operator": "<",
+        "value": 78.48,
+        "priority": "MEDIUM",
+        "consecutive_measurements": 5
+    },
+    {
+        "rule_id": "R002",
+        "type": "simple",
+        "sensor_id": "TEMP-012",
+        "operator": ">",
+        "value": 94.25,
+        "priority": "HIGH"
+    },
+    {
+        "rule_id": "R003",
+        "type": "step_difference",
+        "sensor_id": "HUM-010",
+        "operator": "<",
+        "value": 46.88,
+        "priority": "LOW"
+    },
+    {
+        "rule_id": "R004",
+        "type": "stateful",
+        "sensor_id": "HUM-007",
+        "operator": ">",
+        "value": 91.87,
+        "priority": "HIGH",
+        "consecutive_measurements": 3
+    },
+    {
+        "rule_id": "R005",
+        "type": "stateful",
+        "sensor_id": "TEMP-003",
+        "operator": ">",
+        "value": 80.7,
+        "priority": "MEDIUM",
+        "consecutive_measurements": 7
+    },
+    {
+        "rule_id": "R006",
+        "type": "step_difference",
+        "sensor_id": "HUM-005",
+        "operator": ">",
+        "value": 117.97,
+        "priority": "HIGH"
+    },
+    {
+        "rule_id": "R007",
+        "type": "simple",
+        "sensor_id": "FLOW-006",
+        "operator": ">",
+        "value": 109.76,
+        "priority": "MEDIUM"
+    },
+    {
+        "rule_id": "R008",
+        "type": "simple",
+        "sensor_id": "TEMP-001",
+        "operator": ">",
+        "value": 73.38,
+        "priority": "MEDIUM"
+    },
+    {
+        "rule_id": "R009",
+        "type": "simple",
+        "sensor_id": "TEMP-012",
+        "operator": "<",
+        "value": 59.42,
+        "priority": "HIGH"
+    },
+    {
+        "rule_id": "R010",
+        "type": "simple",
+        "sensor_id": "TEMP-011",
+        "operator": "<",
+        "value": 80.59,
+        "priority": "HIGH"
+    },
+    {
+        "rule_id": "R011",
+        "type": "correlation",
+        "logic": "AND",
+        "conditions": [
+            "R008",
+            "R010"
+        ],
+        "priority": "MEDIUM"
+    },
+    {
+        "rule_id": "R012",
+        "type": "stateful",
+        "sensor_id": "TEMP-012",
+        "operator": ">",
+        "value": 93.59,
+        "priority": "MEDIUM",
+        "consecutive_measurements": 4
+    },
+    {
+        "rule_id": "R013",
+        "type": "stateful",
+        "sensor_id": "TEMP-011",
+        "operator": ">",
+        "value": 115.07,
+        "priority": "HIGH",
+        "consecutive_measurements": 5
+    },
+    {
+        "rule_id": "R014",
+        "type": "simple",
+        "sensor_id": "HUM-009",
+        "operator": ">",
+        "value": 86.97,
+        "priority": "LOW"
+    },
+    {
+        "rule_id": "R015",
+        "type": "simple",
+        "sensor_id": "FLOW-006",
+        "operator": ">",
+        "value": 110.1,
+        "priority": "LOW"
+    },
+    {
+        "rule_id": "R016",
+        "type": "simple",
+        "sensor_id": "TEMP-012",
+        "operator": "<",
+        "value": 57.98,
+        "priority": "HIGH"
+    },
+    {
+        "rule_id": "R017",
+        "type": "step_difference",
+        "sensor_id": "FLOW-006",
+        "operator": "<",
+        "value": 79.13,
+        "priority": "MEDIUM"
+    },
+    {
+        "rule_id": "R018",
+        "type": "step_difference",
+        "sensor_id": "HUM-008",
+        "operator": ">",
+        "value": 88.18,
+        "priority": "LOW"
+    },
+    {
+        "rule_id": "R019",
+        "type": "correlation",
+        "logic": "AND",
+        "conditions": [
+            "R001",
+            "R012"
+        ],
+        "priority": "HIGH"
+    },
+    {
+        "rule_id": "R020",
+        "type": "simple",
+        "sensor_id": "TEMP-001",
+        "operator": ">",
+        "value": 72.01,
+        "priority": "HIGH"
+    }
+]
