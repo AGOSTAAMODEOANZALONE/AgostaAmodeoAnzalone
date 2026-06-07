@@ -9,7 +9,8 @@
 #
 # Usage:
 #   sbatch job.sh
-#   sbatch job.sh --export=CSV_PATH=input/telemetry/export_sat_alpha_large.csv
+#   sbatch --export=ALL,CSV_PATH=input/telemetry/export_sat_alpha_large.csv job.sh
+#   sbatch --export=ALL,BENCHMARK=0 job.sh   # keep batch audit files
 # ===========================================================================
 
 #SBATCH --job-name=astralog_hpc
@@ -37,6 +38,31 @@ RULES_PATH="${RULES_PATH:-input/rules_SAT_ALPHA.json}"
 SENSORS_PATH="${SENSORS_PATH:-input/sensors_SAT_ALPHA.yaml}"
 OUTPUT_DIR="${OUTPUT_DIR:-output}"
 EXECUTABLE="${EXECUTABLE:-build/bin/astralog_processing}"
+BATCH_STRATEGY="${BATCH_STRATEGY:-count}"
+BATCH_SIZE="${BATCH_SIZE:-100000}"
+BATCH_INTERVAL="${BATCH_INTERVAL:-5000}"
+BENCHMARK="${BENCHMARK:-1}"
+
+BENCHMARK_ARGS=()
+BENCHMARK_LABEL="OFF"
+case "${BENCHMARK}" in
+    1|true|TRUE|yes|YES|on|ON)
+        BENCHMARK_ARGS+=(--benchmark)
+        BENCHMARK_LABEL="ON"
+        ;;
+esac
+
+RUN_ARGS=(
+    --csv "${CSV_PATH}"
+    --rules "${RULES_PATH}"
+    --sensors "${SENSORS_PATH}"
+    --output-dir "${OUTPUT_DIR}"
+    --threads "${OMP_NUM_THREADS}"
+    --batch-strategy "${BATCH_STRATEGY}"
+    --batch-size "${BATCH_SIZE}"
+    --batch-interval "${BATCH_INTERVAL}"
+    "${BENCHMARK_ARGS[@]}"
+)
 
 # === Container Support ===
 # If a Singularity container is present, run inside it.
@@ -57,6 +83,9 @@ echo "  Rules file:     ${RULES_PATH}"
 echo "  Sensors file:   ${SENSORS_PATH}"
 echo "  Output dir:     ${OUTPUT_DIR}"
 echo "  Executable:     ${EXECUTABLE}"
+echo "  Batch strategy: ${BATCH_STRATEGY}"
+echo "  Batch size:     ${BATCH_SIZE}"
+echo "  Benchmark mode: ${BENCHMARK_LABEL}"
 echo "============================================================="
 
 # === Create output directory ===
@@ -79,20 +108,10 @@ START_TIME=$(date +%s%N)
 
 if [ -f "${CONTAINER}" ]; then
     echo "[job] Running inside Singularity container: ${CONTAINER}"
-    singularity exec "${CONTAINER}" "${EXECUTABLE}" \
-        --csv "${CSV_PATH}" \
-        --rules "${RULES_PATH}" \
-        --sensors "${SENSORS_PATH}" \
-        --output-dir "${OUTPUT_DIR}" \
-        --threads "${OMP_NUM_THREADS}"
+    singularity exec "${CONTAINER}" "${EXECUTABLE}" "${RUN_ARGS[@]}"
 else
     echo "[job] Running native executable"
-    "${EXECUTABLE}" \
-        --csv "${CSV_PATH}" \
-        --rules "${RULES_PATH}" \
-        --sensors "${SENSORS_PATH}" \
-        --output-dir "${OUTPUT_DIR}" \
-        --threads "${OMP_NUM_THREADS}"
+    "${EXECUTABLE}" "${RUN_ARGS[@]}"
 fi
 
 EXIT_CODE=$?

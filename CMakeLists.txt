@@ -32,12 +32,12 @@ set_target_properties(astralog_processing PROPERTIES
 option(BUILD_TESTS "Build test suite" OFF)
 if(BUILD_TESTS)
     enable_testing()
-    add_executable(test_processing tests/test_processing.cpp)
-    target_include_directories(test_processing PRIVATE
+    add_executable(processing_tests test/test_processing.cpp)
+    target_include_directories(processing_tests PRIVATE
         src
     )
-    target_link_libraries(test_processing
+    target_link_libraries(processing_tests
         OpenMP::OpenMP_CXX
     )
-    add_test(NAME processing_tests COMMAND test_processing)
+    add_test(NAME processing_tests COMMAND processing_tests)
 endif()

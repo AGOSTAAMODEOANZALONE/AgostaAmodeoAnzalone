@@ -53,9 +53,8 @@ No external libraries are required beyond the C++ standard library and OpenMP. J
 ├── Singularity.def             # Container definition (g++, cmake, OpenMP)
 ├── job.sh                      # SLURM script for Galileo 100
 ├── LICENSE                     # MIT License
-├── build_and_run.sh            # Local build + run convenience script
-├── clean_and_run.sh            # Clean build + run script
-├── clean_outputs.sh            # Remove output files
+├── build_and_run.sh            # Local build/run script with clean and benchmark modes
+├── profile_gprof.sh            # Optional gprof profiling script
 │
 ├── src/                        # Source code
 │   ├── main.cpp                # Entry point & orchestration
@@ -68,7 +67,7 @@ No external libraries are required beyond the C++ standard library and OpenMP. J
 │   └── output_formatter.hpp    # Spec-compliant output formatting
 │
 ├── test/                       # Test suite
-│   └── (test files)
+│   └── test_processing.cpp
 │
 ├── input/                      # Input data
 │   ├── sensors_SAT_ALPHA.yaml  # Sensor configuration (12 sensors)
@@ -76,7 +75,8 @@ No external libraries are required beyond the C++ standard library and OpenMP. J
 │   └── telemetry/              # CSV telemetry data files
 │       ├── export_sat_alpha_small.csv   (430 KB)
 │       ├── export_sat_alpha_medium.csv  (4.3 MB)
-│       └── export_sat_alpha_large.csv   (43 MB)
+│       ├── export_sat_alpha_large.csv   (43 MB)
+│       └── fix.sh                       # Timestamp-fixing helper script
 │
 ├── docs/                       # Documentation
 │   └── AmodeoAnzaloneAgosta.pdf  # Requirement analysis & design document
@@ -106,7 +106,7 @@ The implementation follows the component architecture defined in our requirement
 | Batch Accumulator | `batch_accumulator.hpp` | Count-based and time-based batch flushing with audit trail |
 | Processing Pipeline | `timestamp_processor.hpp` | 5-phase parallel pipeline (grouping → evaluation → correlation → output) |
 | Output Formatter | `output_formatter.hpp` | Spec-compliant `valid_data.csv` and `alarms.log` generation |
-| Orchestrator | `main.cpp` | Thin wiring of all components, CLI argument parsing, batch loop |
+| Orchestrator | `main.cpp` | Thin wiring of all components, CLI argument parsing, precomputed rule setup, batch loop |
 
 ### Simplifications & Variations
 
@@ -118,7 +118,7 @@ Compared to the Phase 1 architecture, the following simplifications were made:
 
 ### Batch Accumulator
 
-The **Batch Accumulator** component sits between CSV validation and rule evaluation, implementing the architecture described in our Phase 1 design document (Section 3.1.1, FR.3, FR.7, Use Case 3). It supports two flushing strategies:
+The **Batch Accumulator** component sits between CSV validation and rule evaluation, implementing the architecture described in our Phase 1 design document (Section 3.1.1, FR.3, FR.7, Use Case 3). It supports two flushing strategies and flushes only at timestamp boundaries, so all readings for a timestamp stay in the same batch. A `--benchmark` mode disables batch audit-file writes and per-batch phase logs for cleaner performance measurements.
 
 | Strategy | Trigger | CLI Flag | Default |
 | :--- | :--- | :--- | :--- |
@@ -135,7 +135,7 @@ CSV File → mmap → Parallel Parse → Valid Records
                                         ↓
                           ┌─────────────────────────┐
                           │  for each flushed batch: │
-                          │    → write audit .txt    │
+                          │    → write audit .txt*   │
                           │    → process_pipeline()  │
                           │    → append output files │
                           └─────────────────────────┘
@@ -143,9 +143,15 @@ CSV File → mmap → Parallel Parse → Valid Records
                               valid_data.csv + alarms.log
 ```
 
-**Cross-batch state persistence**: Sensor state (`previous_value` for step-diff rules, `consecutive_violations` for stateful rules) is carried forward between batches via a `PipelineState` object. This ensures that rules evaluate identically regardless of batch size — processing 10 batches of 100 records produces the same output as 1 batch of 1000 records.
+**Cross-batch state persistence**: Sensor state (`previous_value` for step-diff rules, `consecutive_violations` for stateful rules) is carried forward between batches via a `PipelineState` object. Together with timestamp-boundary flushing, this ensures that rule evaluation and per-timestamp output remain stable across batch sizes.
 
-Each flushed batch writes an audit file to `output/batches/` (e.g., `batch_001_20251115_120000.txt`) containing the CSV records in that batch, providing full traceability.
+Each flushed batch writes an audit file to `output/batches/` (e.g., `batch_001_20251115_120000.txt`) containing the CSV records in that batch, providing full traceability. Audit files are skipped when `--benchmark` is enabled.
+
+Rules are prepared once after configuration loading: sensor tokens are assigned, rule vectors are sorted by priority, per-sensor lookup tables are built, and correlation rules are cached. Each batch reuses these precomputed structures while `PipelineState` carries step-diff and stateful history across batches.
+
+Rule violations use small-buffer storage: the common single-sensor alarm stores its sensor/value pair inline and keeps a pointer to the stable rule definition instead of copying rule metadata. Larger correlation alarms can still spill to dynamic storage, preserving flexibility without paying heap-allocation cost for ordinary violations.
+
+Before formatting `alarms.log`, violations for each timestamp are ordered by rule priority (`HIGH`, then `MEDIUM`, then `LOW`) with rule ID as a deterministic tie-breaker.
 
 ---
 
@@ -197,16 +203,18 @@ On the CINECA Galileo 100 (48-core Intel CascadeLake):
 
 ## 🧪 Test Cases & Rationale
 
-<!-- TODO: Describe test cases after implementing test/ directory -->
-
 The test suite covers the following areas:
 
 1. **Rule evaluation correctness**: Unit tests for each rule type (threshold, step_difference, stateful, correlation) verifying correct alarm triggering.
 2. **Step-diff signed delta**: Regression tests ensuring the signed delta (no `abs()`) correctly detects drops and rises.
 3. **Stateful counter behaviour**: Tests for counter increment, reset on non-violation, and alarm triggering at exactly `consecutive_measurements`.
-4. **CSV validation**: Tests for malformed lines, missing fields, non-numeric values, and "ERR"/"CORRUPT" markers.
-5. **Output format compliance**: Verifies exact `valid_data.csv` and `alarms.log` format against spec examples.
-6. **Per-timestamp grouping**: Tests that NOMINAL is only emitted when zero rules fire, and that any violation suppresses the NOMINAL line.
+4. **CSV validation and token lookup**: Tests malformed lines, missing fields, non-numeric values, "ERR"/"CORRUPT" markers, and `string_view` sensor-token lookup.
+5. **RuleViolation storage**: Tests inline sensor/value storage and fallback storage for larger correlation alarms.
+6. **Cross-batch state persistence**: Tests that stateful counters carry across batch boundaries.
+7. **Output format compliance**: Verifies exact `valid_data.csv` and `alarms.log` format against spec examples.
+8. **Per-timestamp grouping**: Tests that NOMINAL is only emitted when zero rules fire, and that any violation suppresses the NOMINAL line.
+9. **Batch boundary safety**: Tests that count-based flushing waits until a timestamp is complete.
+10. **Benchmark mode**: Tests that audit files are skipped when benchmark mode disables them.
 
 ---
 
@@ -237,7 +245,7 @@ Credentials for CINECA access are stored as GitHub Secrets (never hard-coded).
 
 3. **Parallelization with stateful rules**: Stateful and step-diff rules require per-sensor sequential processing, but naively serializing the entire pipeline wastes cores. The solution was to parallelize *across sensors* while processing each sensor's timeline sequentially within a thread.
 
-4. **Output format compliance**: Getting the exact separator format right (semicolon-space `"; "` for fields, comma-space `", "` for correlation multi-values, pipe `|` for sensor aggregation) required careful attention to the spec examples.
+4. **Output format compliance**: Getting the exact separator format right (semicolon `";"` for fields, comma `","` for correlation multi-values, pipe `"|"` for sensor aggregation) required careful attention to the spec examples.
 
 ### Ongoing / Not Yet Resolved
 
@@ -264,6 +272,10 @@ All AI-generated outputs were critically reviewed, tested, and adapted to ensure
 
 ### Prerequisites
 
+For a complete command reference covering local execution, SLURM execution,
+fixed timestamp preprocessing, profiling, and tests, see
+`docs/EXECUTION_GUIDE.md`.
+
 - C++17 compatible compiler (e.g., `g++ >= 7`)
 - `cmake >= 3.16`
 - OpenMP support (typically included with `g++`)
@@ -281,6 +293,26 @@ Or use the convenience script:
 
 ```bash
 ./build_and_run.sh
+./build_and_run.sh --clean
+./build_and_run.sh --benchmark
+CSV_PATH=input/telemetry/export_sat_alpha_large.csv BATCH_SIZE=100000 ./build_and_run.sh --benchmark
+```
+
+For cluster execution, `job.sh` defaults to benchmark mode to avoid batch audit I/O during timing runs. Set `BENCHMARK=0` when audit files are needed:
+
+```bash
+sbatch job.sh
+sbatch --export=ALL,BENCHMARK=0 job.sh
+sbatch --export=ALL,CSV_PATH=input/telemetry/export_sat_alpha_large.csv,BATCH_SIZE=100000 job.sh
+```
+
+Telemetry files with repeated timestamps can be preprocessed with:
+
+```bash
+cd input/telemetry
+bash fix.sh export_sat_alpha_small.csv
+cd ../..
+CSV_PATH=input/telemetry/export_sat_alpha_small_fixed.csv ./build_and_run.sh --benchmark
 ```
 
 ### Run
@@ -305,12 +337,13 @@ Or use the convenience script:
 | `--batch-strategy <s>` | `count` | Batch flushing strategy: `count` or `time` |
 | `--batch-size <n>` | `1000` | Records per batch (count strategy) |
 | `--batch-interval <ms>` | `5000` | Milliseconds per batch (time strategy) |
+| `--benchmark` | disabled | Disable batch audit files and per-batch phase logs for timing runs |
 
 ### Output Files
 
 - `output/valid_data.csv` — NOMINAL timestamps (all sensors, pipe-separated)
 - `output/alarms.log` — Rule violations (one line per violated rule)
-- `output/batches/` — Batch audit files (one `.txt` per flushed batch)
+- `output/batches/` — Batch audit files (one `.txt` per flushed batch, unless `--benchmark` is enabled)
 
 ---
 

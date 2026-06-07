@@ -2,16 +2,16 @@
  * @file output_formatter.hpp
  * @brief Spec-compliant output formatting for valid_data.csv and alarms.log.
  *
- * Output formats (semicolons followed by spaces, per ESA spec):
+ * Output formats (bare semicolon separators, per ESA spec):
  *
  *   valid_data.csv (NOMINAL timestamps):
- *     TIMESTAMP; NOMINAL; SENSOR_1:VALUE_1|SENSOR_2:VALUE_2|...
+ *     TIMESTAMP;NOMINAL;SENSOR_1:VALUE_1|SENSOR_2:VALUE_2|...
  *
  *   alarms.log (ANOMALOUS timestamps):
- *     TIMESTAMP; RULE_ID; PRIORITY; SENSOR(S); VALUE(S)
+ *     TIMESTAMP;RULE_ID;PRIORITY;SENSOR(S);VALUE(S)
  *
- * For correlation rules, sensors and values are comma-space separated:
- *     TIMESTAMP; R4; HIGH; TEMP-01, PRES-01; 51.2, 98.0
+ * For correlation rules, sensors and values are comma separated:
+ *     TIMESTAMP;R4;HIGH;TEMP-01,PRES-01;51.2,98.0
  */
 
 #ifndef ASTRALOG_OUTPUT_FORMATTER_HPP
@@ -58,21 +58,30 @@ inline std::string format_value(double val) {
 /**
  * @brief Format a NOMINAL line for valid_data.csv.
  *
- * Format: TIMESTAMP; NOMINAL; SENSOR_1:VALUE_1|SENSOR_2:VALUE_2|...
+ * Format: TIMESTAMP;NOMINAL;SENSOR_1:VALUE_1|SENSOR_2:VALUE_2|...
  *
- * @param group  The timestamp group containing all sensor readings
- * @return       Formatted line (with trailing newline)
+ * @param group              The timestamp group containing all sensor readings
+ * @param inverse_token_map  Lookup: sensor_token → sensor_id string
+ * @return                   Formatted line (with trailing newline)
  */
-inline std::string format_nominal_line(const TimestampGroup& group) {
+inline std::string format_nominal_line(
+    const TimestampGroup& group,
+    const std::vector<std::string>& inverse_token_map)
+{
     std::string line;
     line.reserve(128);
 
     line += group.timestamp;
-    line += "; NOMINAL; ";
+    line += ";NOMINAL;";
 
     for (size_t i = 0; i < group.readings.size(); ++i) {
         if (i > 0) line += '|';
-        line += group.readings[i].sensor_id;
+        int token = group.readings[i].sensor_token;
+        if (token >= 0 && static_cast<size_t>(token) < inverse_token_map.size()) {
+            line += inverse_token_map[token];
+        } else {
+            line += "UNKNOWN";
+        }
         line += ':';
         line += format_value(group.readings[i].value);
     }
@@ -89,42 +98,50 @@ inline std::string format_nominal_line(const TimestampGroup& group) {
  * @brief Format alarm lines for alarms.log.
  *
  * For simple/step_diff/stateful rules (single sensor):
- *   TIMESTAMP; RULE_ID; PRIORITY; SENSOR; VALUE
+ *   TIMESTAMP;RULE_ID;PRIORITY;SENSOR;VALUE
  *
  * For correlation rules (multiple sensors):
- *   TIMESTAMP; RULE_ID; PRIORITY; SENSOR_1, SENSOR_2; VALUE_1, VALUE_2
+ *   TIMESTAMP;RULE_ID;PRIORITY;SENSOR_1,SENSOR_2;VALUE_1,VALUE_2
  *
- * @param timestamp  The timestamp string
- * @param violations All rule violations at this timestamp
- * @return           Concatenated alarm lines (each with trailing newline)
+ * @param timestamp          The timestamp string
+ * @param violations         All rule violations at this timestamp
+ * @param inverse_token_map  Lookup: sensor_token → sensor_id string
+ * @return                   Concatenated alarm lines (each with trailing newline)
  */
 inline std::string format_alarm_lines(
     const std::string& timestamp,
-    const std::vector<RuleViolation>& violations)
+    const std::vector<RuleViolation>& violations,
+    const std::vector<std::string>& inverse_token_map)
 {
     std::string lines;
     lines.reserve(violations.size() * 80);
 
     for (const auto& v : violations) {
         lines += timestamp;
-        lines += "; ";
-        lines += v.rule_id;
-        lines += "; ";
-        lines += priority_to_string(v.priority);
-        lines += "; ";
+        lines += ';';
+        lines += v.rule ? v.rule->rule_id : "UNKNOWN_RULE";
+        lines += ';';
+        lines += priority_to_string(v.rule ? v.rule->priority
+                                           : Priority::LOW);
+        lines += ';';
 
-        // Sensor IDs (comma-space separated for correlation)
-        for (size_t i = 0; i < v.sensor_ids.size(); ++i) {
-            if (i > 0) lines += ", ";
-            lines += v.sensor_ids[i];
+        // Sensor names (comma separated for correlation)
+        for (size_t i = 0; i < v.size(); ++i) {
+            if (i > 0) lines += ',';
+            int token = v.sensor_token_at(i);
+            if (token >= 0 && static_cast<size_t>(token) < inverse_token_map.size()) {
+                lines += inverse_token_map[token];
+            } else {
+                lines += "UNKNOWN";
+            }
         }
 
-        lines += "; ";
+        lines += ';';
 
-        // Values (comma-space separated for correlation)
-        for (size_t i = 0; i < v.values.size(); ++i) {
-            if (i > 0) lines += ", ";
-            lines += format_value(v.values[i]);
+        // Values (comma separated for correlation)
+        for (size_t i = 0; i < v.size(); ++i) {
+            if (i > 0) lines += ',';
+            lines += format_value(v.value_at(i));
         }
 
         lines += '\n';

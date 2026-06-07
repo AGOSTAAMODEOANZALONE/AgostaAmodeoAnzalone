@@ -41,7 +41,7 @@
 #include <vector>
 #include <string>
 #include <unordered_map>
-#include <unordered_set>
+#include <algorithm>
 #include <iostream>
 #include <chrono>
 #include <utility>
@@ -74,6 +74,21 @@ struct SensorRuleSet {
     std::vector<StatefulEntry> stateful;
 };
 
+/**
+ * @struct PreparedRules
+ * @brief Rule lookup structures built once after configuration loading.
+ *
+ * Pointers inside this structure refer to the stable RuleDefinition objects
+ * owned by the rules vector loaded in main().
+ */
+struct PreparedRules {
+    std::vector<SensorRuleSet> sensor_rules;
+    std::vector<const RuleDefinition*> correlation_rules;
+    size_t threshold_count = 0;
+    size_t step_diff_count = 0;
+    size_t stateful_count = 0;
+};
+
 // ===========================================================================
 // PipelineState: cross-batch sensor state persistence
 // ===========================================================================
@@ -89,8 +104,9 @@ struct SensorRuleSet {
  *
  * Usage:
  *   PipelineState state;
+ *   auto prepared = prepare_rules(rules, token_map, num_sensors);
  *   for each batch:
- *       result = process_pipeline(batch, rules, token_map, num_sensors, state);
+ *       result = process_pipeline(batch, prepared, inverse_token_map, state);
  */
 struct PipelineState {
     std::vector<SensorState> sensor_states;  ///< Indexed by sensor_token
@@ -116,6 +132,73 @@ struct PipelineState {
 };
 
 // ===========================================================================
+// Rule preparation
+// ===========================================================================
+
+/**
+ * @brief Precompute all per-sensor and correlation rule lookup structures.
+ *
+ * This removes repeated rule categorisation, priority sorting, and sensor-rule
+ * table construction from the per-batch processing path.
+ */
+inline PreparedRules prepare_rules(
+    std::vector<RuleDefinition>& all_rules,
+    const std::unordered_map<std::string, int>& token_map,
+    int num_sensors)
+{
+    assign_sensor_tokens(all_rules, token_map);
+
+    std::vector<const RuleDefinition*> threshold_rules;
+    std::vector<const RuleDefinition*> step_diff_rules;
+    std::vector<const RuleDefinition*> stateful_rules;
+    std::vector<const RuleDefinition*> correlation_rules;
+
+    threshold_rules.reserve(all_rules.size());
+    step_diff_rules.reserve(all_rules.size());
+    stateful_rules.reserve(all_rules.size());
+    correlation_rules.reserve(all_rules.size());
+
+    for (const auto& r : all_rules) {
+        switch (r.type) {
+            case RuleType::THRESHOLD:   threshold_rules.push_back(&r); break;
+            case RuleType::STEP_DIFF:   step_diff_rules.push_back(&r); break;
+            case RuleType::STATEFUL:    stateful_rules.push_back(&r);  break;
+            case RuleType::CORRELATION: correlation_rules.push_back(&r); break;
+        }
+    }
+
+    sort_by_priority(threshold_rules);
+    sort_by_priority(step_diff_rules);
+    sort_by_priority(stateful_rules);
+    sort_by_priority(correlation_rules);
+
+    PreparedRules prepared;
+    prepared.threshold_count = threshold_rules.size();
+    prepared.step_diff_count = step_diff_rules.size();
+    prepared.stateful_count = stateful_rules.size();
+    prepared.correlation_rules = std::move(correlation_rules);
+    prepared.sensor_rules.resize(num_sensors);
+
+    for (const auto* r : threshold_rules) {
+        if (r->sensor_token_idx >= 0 && r->sensor_token_idx < num_sensors)
+            prepared.sensor_rules[r->sensor_token_idx].threshold.push_back(r);
+    }
+    for (const auto* r : step_diff_rules) {
+        if (r->sensor_token_idx >= 0 && r->sensor_token_idx < num_sensors)
+            prepared.sensor_rules[r->sensor_token_idx].step_diff.push_back(r);
+    }
+    for (const auto* r : stateful_rules) {
+        if (r->sensor_token_idx >= 0 && r->sensor_token_idx < num_sensors) {
+            auto& stateful = prepared.sensor_rules[r->sensor_token_idx].stateful;
+            int slot = static_cast<int>(stateful.size());
+            stateful.push_back({r, slot});
+        }
+    }
+
+    return prepared;
+}
+
+// ===========================================================================
 // Phase 1: Build timestamp groups
 // ===========================================================================
 
@@ -135,21 +218,20 @@ inline std::vector<TimestampGroup> build_timestamp_groups(
     std::vector<TimestampGroup> groups;
     if (records.empty()) return groups;
 
-    groups.reserve(records.size() / 10);  // Rough estimate
+    // Better estimate: ~12 sensors per timestamp in typical satellite data
+    const size_t estimated_groups = records.size() / 12 + 1;
+    groups.reserve(estimated_groups);
 
     std::string current_ts;
     for (const auto& rec : records) {
         if (rec.timestamp != current_ts) {
             groups.push_back({});
             groups.back().timestamp = rec.timestamp;
+            groups.back().readings.reserve(16);  // Typical sensor count
             current_ts = rec.timestamp;
         }
 
-        TimestampGroup::Reading reading;
-        reading.sensor_token = rec.sensor_token;
-        reading.sensor_id    = rec.sensor_id;
-        reading.value        = rec.value;
-        groups.back().readings.push_back(std::move(reading));
+        groups.back().readings.push_back({rec.sensor_token, rec.value});
     }
 
     return groups;
@@ -177,9 +259,11 @@ build_per_sensor_sequences(const std::vector<TimestampGroup>& groups,
 {
     std::vector<std::vector<std::pair<size_t, size_t>>> sequences(num_sensors);
 
-    // Pre-allocate: each sensor appears roughly once per timestamp
+    // Pre-allocate: each sensor appears roughly once per timestamp, with
+    // slack for slightly out-of-sync or duplicated sensor packets.
+    const size_t reserve_per_sensor = groups.size() + groups.size() / 2 + 1;
     for (auto& seq : sequences) {
-        seq.reserve(groups.size());
+        seq.reserve(reserve_per_sensor);
     }
 
     for (size_t g = 0; g < groups.size(); ++g) {
@@ -226,15 +310,30 @@ inline std::vector<std::vector<RuleViolation>> evaluate_rules_parallel(
     const int num_threads = omp_get_max_threads();
     const size_t num_groups = groups.size();
 
-    // Per-thread violation storage to avoid synchronization
-    // thread_violations[tid] maps timestamp_idx → vector of violations
-    std::vector<std::unordered_map<size_t, std::vector<RuleViolation>>>
-        thread_violations(num_threads);
+    // Per-thread violation storage: flat pre-allocated 2D vector.
+    // thread_violations[tid][group_idx] is a vector of violations.
+    // This replaces the old unordered_map, eliminating all hashing overhead.
+    std::vector<std::vector<std::vector<RuleViolation>>>
+        thread_violations(num_threads,
+                          std::vector<std::vector<RuleViolation>>(num_groups));
 
     #pragma omp parallel
     {
         int tid = omp_get_thread_num();
         auto& my_violations = thread_violations[tid];
+
+        auto append_violation = [&](size_t group_idx,
+                                    const RuleDefinition& rule,
+                                    int sensor_token,
+                                    double value) {
+            auto& group_violations = my_violations[group_idx];
+            if (group_violations.empty()) {
+                group_violations.reserve(8);
+            }
+            RuleViolation violation(&rule);
+            violation.add(sensor_token, value);
+            group_violations.push_back(std::move(violation));
+        };
 
         // Each sensor is processed independently → parallel for across sensors
         #pragma omp for schedule(dynamic)
@@ -256,17 +355,12 @@ inline std::vector<std::vector<RuleViolation>> evaluate_rules_parallel(
             for (const auto& [group_idx, reading_idx] : seq) {
                 const auto& reading = groups[group_idx].readings[reading_idx];
                 double value = reading.value;
-                const std::string& sensor_id = reading.sensor_id;
 
                 // --- THRESHOLD rules (sorted by priority) ---
                 for (const auto* rule : rules.threshold) {
                     if (evaluate_threshold(value, *rule)) {
-                        my_violations[group_idx].push_back({
-                            rule->rule_id,
-                            rule->priority,
-                            {sensor_id},
-                            {value}
-                        });
+                        append_violation(group_idx, *rule,
+                                         reading.sensor_token, value);
                     }
                 }
 
@@ -274,12 +368,8 @@ inline std::vector<std::vector<RuleViolation>> evaluate_rules_parallel(
                 if (state.has_previous) {
                     for (const auto* rule : rules.step_diff) {
                         if (evaluate_step_diff(value, state, *rule)) {
-                            my_violations[group_idx].push_back({
-                                rule->rule_id,
-                                rule->priority,
-                                {sensor_id},
-                                {value}
-                            });
+                            append_violation(group_idx, *rule,
+                                             reading.sensor_token, value);
                         }
                     }
                 }
@@ -289,12 +379,8 @@ inline std::vector<std::vector<RuleViolation>> evaluate_rules_parallel(
                     const auto& entry = rules.stateful[si];
                     if (evaluate_stateful(value, state, *entry.rule,
                                           entry.slot)) {
-                        my_violations[group_idx].push_back({
-                            entry.rule->rule_id,
-                            entry.rule->priority,
-                            {sensor_id},
-                            {value}
-                        });
+                        append_violation(group_idx, *entry.rule,
+                                         reading.sensor_token, value);
                     }
                 }
 
@@ -310,12 +396,17 @@ inline std::vector<std::vector<RuleViolation>> evaluate_rules_parallel(
         }
     }
 
-    // Merge per-thread violations into per-timestamp vector
+    // Merge per-thread violations into per-timestamp vector.
+    // O(1) array access replaces the old hash map iteration.
     std::vector<std::vector<RuleViolation>> result(num_groups);
     for (int t = 0; t < num_threads; ++t) {
-        for (auto& [ts_idx, violations] : thread_violations[t]) {
-            for (auto& v : violations) {
-                result[ts_idx].push_back(std::move(v));
+        for (size_t g = 0; g < num_groups; ++g) {
+            auto& src = thread_violations[t][g];
+            if (!src.empty()) {
+                auto& dst = result[g];
+                dst.insert(dst.end(),
+                           std::make_move_iterator(src.begin()),
+                           std::make_move_iterator(src.end()));
             }
         }
     }
@@ -347,20 +438,38 @@ inline void evaluate_correlations(
 {
     if (correlation_rules.empty()) return;
 
+    // Small struct for linear-scan lookup (replaces unordered_map).
+    // Violations per timestamp are typically 1-5, so linear scan is
+    // faster than hashing for these tiny N values.
+    struct FiredEntry {
+        const RuleDefinition* rule;  // non-owning pointer, avoids copy
+        int   sensor_token;
+        double value;
+    };
+
     for (size_t g = 0; g < groups.size(); ++g) {
         if (timestamp_violations[g].empty()) continue;
 
-        // Build lookup: which rule_ids fired at this timestamp, and their data
-        std::unordered_set<std::string> fired_rule_ids;
-        std::unordered_map<std::string, std::pair<std::string, double>> rule_data;
+        timestamp_violations[g].reserve(
+            timestamp_violations[g].size() + correlation_rules.size());
+
+        // Build flat lookup array of fired rule IDs and their data
+        std::vector<FiredEntry> fired;
+        fired.reserve(timestamp_violations[g].size());
 
         for (const auto& v : timestamp_violations[g]) {
-            fired_rule_ids.insert(v.rule_id);
-            // Store the first sensor/value for sub-rule lookup
-            if (!v.sensor_ids.empty()) {
-                rule_data[v.rule_id] = {v.sensor_ids[0], v.values[0]};
-            }
+            int st = v.empty() ? -1 : v.sensor_token_at(0);
+            double val = v.empty() ? 0.0 : v.value_at(0);
+            fired.push_back({v.rule, st, val});
         }
+
+        // Lambda: linear scan to check if a rule_id fired
+        auto find_fired = [&](const std::string& target) -> const FiredEntry* {
+            for (const auto& f : fired) {
+                if (f.rule && f.rule->rule_id == target) return &f;
+            }
+            return nullptr;
+        };
 
         // Evaluate each correlation rule
         for (const auto* rule : correlation_rules) {
@@ -369,7 +478,7 @@ inline void evaluate_correlations(
             if (rule->logic == "AND") {
                 triggered = true;
                 for (const auto& sr_id : rule->sub_rules) {
-                    if (fired_rule_ids.find(sr_id) == fired_rule_ids.end()) {
+                    if (!find_fired(sr_id)) {
                         triggered = false;
                         break;
                     }
@@ -377,7 +486,7 @@ inline void evaluate_correlations(
             } else if (rule->logic == "OR") {
                 triggered = false;
                 for (const auto& sr_id : rule->sub_rules) {
-                    if (fired_rule_ids.find(sr_id) != fired_rule_ids.end()) {
+                    if (find_fired(sr_id)) {
                         triggered = true;
                         break;
                     }
@@ -385,22 +494,43 @@ inline void evaluate_correlations(
             }
 
             if (triggered) {
-                RuleViolation corr_v;
-                corr_v.rule_id  = rule->rule_id;
-                corr_v.priority = rule->priority;
+                RuleViolation corr_v(rule);
 
                 // Collect sensors and values from all sub-rules
                 for (const auto& sr_id : rule->sub_rules) {
-                    auto it = rule_data.find(sr_id);
-                    if (it != rule_data.end()) {
-                        corr_v.sensor_ids.push_back(it->second.first);
-                        corr_v.values.push_back(it->second.second);
+                    const FiredEntry* entry = find_fired(sr_id);
+                    if (entry && entry->sensor_token >= 0) {
+                        corr_v.add(entry->sensor_token, entry->value);
                     }
                 }
 
                 timestamp_violations[g].push_back(std::move(corr_v));
             }
         }
+    }
+}
+
+inline void sort_violations_for_output(
+    std::vector<std::vector<RuleViolation>>& timestamp_violations)
+{
+    auto priority_rank = [](const RuleViolation& v) {
+        return v.rule ? static_cast<int>(v.rule->priority) : -1;
+    };
+
+    auto rule_id = [](const RuleViolation& v) -> const std::string& {
+        static const std::string unknown = "UNKNOWN_RULE";
+        return v.rule ? v.rule->rule_id : unknown;
+    };
+
+    for (auto& violations : timestamp_violations) {
+        std::stable_sort(
+            violations.begin(), violations.end(),
+            [&](const RuleViolation& a, const RuleViolation& b) {
+                int pa = priority_rank(a);
+                int pb = priority_rank(b);
+                if (pa != pb) return pa > pb;  // HIGH > MEDIUM > LOW
+                return rule_id(a) < rule_id(b);
+            });
     }
 }
 
@@ -423,6 +553,7 @@ inline void evaluate_correlations(
 inline void generate_output_parallel(
     const std::vector<TimestampGroup>& groups,
     const std::vector<std::vector<RuleViolation>>& timestamp_violations,
+    const std::vector<std::string>& inverse_token_map,
     std::vector<std::string>& valid_lines,
     std::vector<std::string>& alarm_lines)
 {
@@ -434,11 +565,12 @@ inline void generate_output_parallel(
     for (size_t g = 0; g < n; ++g) {
         if (timestamp_violations[g].empty()) {
             // NOMINAL: aggregated line with all sensor values
-            valid_lines[g] = format_nominal_line(groups[g]);
+            valid_lines[g] = format_nominal_line(groups[g], inverse_token_map);
         } else {
             // ANOMALOUS: one line per violated rule
             alarm_lines[g] = format_alarm_lines(groups[g].timestamp,
-                                                timestamp_violations[g]);
+                                                timestamp_violations[g],
+                                                inverse_token_map);
         }
     }
 }
@@ -470,73 +602,24 @@ struct ProcessingResult {
  * and stateful consecutive_violations counters carry forward.
  *
  * @param records             Parsed and validated CSV records in order
- * @param all_rules           All loaded rules (will be categorised internally)
- * @param token_map           sensor_id → token mapping
- * @param num_sensors         Total number of known sensors
+ * @param prepared_rules      Precomputed per-sensor and correlation rules
+ * @param inverse_token_map   sensor_token to sensor_id lookup
  * @param state               PipelineState for cross-batch persistence
+ * @param verbose             Emit per-phase timing logs when true
  * @return                    ProcessingResult with output strings and stats
  */
 inline ProcessingResult process_pipeline(
     const std::vector<ParsedRecord>& records,
-    std::vector<RuleDefinition>& all_rules,
-    const std::unordered_map<std::string, int>& token_map,
-    int num_sensors,
-    PipelineState& state)
+    const PreparedRules& prepared_rules,
+    const std::vector<std::string>& inverse_token_map,
+    PipelineState& state,
+    bool verbose = true)
 {
     auto pipeline_start = std::chrono::high_resolution_clock::now();
-
-    // --- Categorise and sort rules by type and priority ---
-
-    // Assign sensor tokens
-    assign_sensor_tokens(all_rules, token_map);
-
-    // Categorise
-    std::vector<const RuleDefinition*> threshold_rules;
-    std::vector<const RuleDefinition*> step_diff_rules;
-    std::vector<const RuleDefinition*> stateful_rules;
-    std::vector<const RuleDefinition*> correlation_rules;
-
-    for (const auto& r : all_rules) {
-        switch (r.type) {
-            case RuleType::THRESHOLD:   threshold_rules.push_back(&r); break;
-            case RuleType::STEP_DIFF:   step_diff_rules.push_back(&r); break;
-            case RuleType::STATEFUL:    stateful_rules.push_back(&r);  break;
-            case RuleType::CORRELATION: correlation_rules.push_back(&r); break;
-        }
-    }
-
-    // Sort each category by priority (HIGH first)
-    sort_by_priority(threshold_rules);
-    sort_by_priority(step_diff_rules);
-    sort_by_priority(stateful_rules);
-    sort_by_priority(correlation_rules);
-
-    // Build per-sensor rule lookup tables
-    std::vector<SensorRuleSet> sensor_rules(num_sensors);
-    for (const auto* r : threshold_rules) {
-        if (r->sensor_token_idx >= 0 && r->sensor_token_idx < num_sensors)
-            sensor_rules[r->sensor_token_idx].threshold.push_back(r);
-    }
-    for (const auto* r : step_diff_rules) {
-        if (r->sensor_token_idx >= 0 && r->sensor_token_idx < num_sensors)
-            sensor_rules[r->sensor_token_idx].step_diff.push_back(r);
-    }
-    for (const auto* r : stateful_rules) {
-        if (r->sensor_token_idx >= 0 && r->sensor_token_idx < num_sensors) {
-            int slot = static_cast<int>(
-                sensor_rules[r->sensor_token_idx].stateful.size());
-            sensor_rules[r->sensor_token_idx].stateful.push_back({r, slot});
-        }
-    }
+    const int num_sensors = static_cast<int>(prepared_rules.sensor_rules.size());
 
     // Initialize PipelineState on first batch
-    state.initialize(num_sensors, sensor_rules);
-
-    std::cerr << "[rules] Categorised: "
-              << threshold_rules.size() << " threshold, "
-              << step_diff_rules.size() << " step_diff, "
-              << stateful_rules.size() << " stateful, "
-              << correlation_rules.size() << " correlation\n";
+    state.initialize(num_sensors, prepared_rules.sensor_rules);
 
     // --- Phase 1: Build timestamp groups ---
     auto phase1_start = std::chrono::high_resolution_clock::now();
@@ -545,8 +628,10 @@ inline ProcessingResult process_pipeline(
     double phase1_ms = std::chrono::duration<double, std::milli>(
         phase1_end - phase1_start).count();
 
-    std::cerr << "[pipeline] Phase 1: Grouped " << groups.size()
-              << " unique timestamps in " << phase1_ms << " ms\n";
+    if (verbose) {
+        std::cerr << "[pipeline] Phase 1: Grouped " << groups.size()
+                  << " unique timestamps in " << phase1_ms << " ms\n";
+    }
 
     // --- Phase 2: Build per-sensor reading sequences ---
     auto phase2_start = std::chrono::high_resolution_clock::now();
@@ -555,42 +640,54 @@ inline ProcessingResult process_pipeline(
     double phase2_ms = std::chrono::duration<double, std::milli>(
         phase2_end - phase2_start).count();
 
-    std::cerr << "[pipeline] Phase 2: Built per-sensor sequences in "
-              << phase2_ms << " ms\n";
+    if (verbose) {
+        std::cerr << "[pipeline] Phase 2: Built per-sensor sequences in "
+                  << phase2_ms << " ms\n";
+    }
 
     // --- Phase 3: Parallel per-sensor rule evaluation ---
     auto phase3_start = std::chrono::high_resolution_clock::now();
     auto timestamp_violations = evaluate_rules_parallel(
-        groups, sensor_sequences, sensor_rules, num_sensors, &state);
+        groups, sensor_sequences, prepared_rules.sensor_rules,
+        num_sensors, &state);
     auto phase3_end = std::chrono::high_resolution_clock::now();
     double phase3_ms = std::chrono::duration<double, std::milli>(
         phase3_end - phase3_start).count();
 
-    std::cerr << "[pipeline] Phase 3: Parallel rule evaluation in "
-              << phase3_ms << " ms (" << omp_get_max_threads()
-              << " threads)\n";
+    if (verbose) {
+        std::cerr << "[pipeline] Phase 3: Parallel rule evaluation in "
+                  << phase3_ms << " ms (" << omp_get_max_threads()
+                  << " threads)\n";
+    }
 
     // --- Phase 4: Correlation evaluation ---
     auto phase4_start = std::chrono::high_resolution_clock::now();
-    evaluate_correlations(groups, timestamp_violations, correlation_rules);
+    evaluate_correlations(groups, timestamp_violations,
+                          prepared_rules.correlation_rules);
+    sort_violations_for_output(timestamp_violations);
     auto phase4_end = std::chrono::high_resolution_clock::now();
     double phase4_ms = std::chrono::duration<double, std::milli>(
         phase4_end - phase4_start).count();
 
-    std::cerr << "[pipeline] Phase 4: Correlation evaluation in "
-              << phase4_ms << " ms\n";
+    if (verbose) {
+        std::cerr << "[pipeline] Phase 4: Correlation evaluation in "
+                  << phase4_ms << " ms\n";
+    }
 
     // --- Phase 5: Parallel output generation ---
     auto phase5_start = std::chrono::high_resolution_clock::now();
     std::vector<std::string> valid_lines, alarm_lines;
     generate_output_parallel(groups, timestamp_violations,
+                             inverse_token_map,
                              valid_lines, alarm_lines);
     auto phase5_end = std::chrono::high_resolution_clock::now();
     double phase5_ms = std::chrono::duration<double, std::milli>(
         phase5_end - phase5_start).count();
 
-    std::cerr << "[pipeline] Phase 5: Parallel output formatting in "
-              << phase5_ms << " ms\n";
+    if (verbose) {
+        std::cerr << "[pipeline] Phase 5: Parallel output formatting in "
+                  << phase5_ms << " ms\n";
+    }
 
     // --- Statistics ---
     uint64_t num_anomalies = 0;
@@ -615,6 +712,24 @@ inline ProcessingResult process_pipeline(
 }
 
 /**
+ * @brief Backward-compatible overload that prepares rules for this call.
+ */
+inline ProcessingResult process_pipeline(
+    const std::vector<ParsedRecord>& records,
+    std::vector<RuleDefinition>& all_rules,
+    const std::unordered_map<std::string, int>& token_map,
+    const std::vector<std::string>& inverse_token_map,
+    int num_sensors,
+    PipelineState& state,
+    bool verbose = true)
+{
+    PreparedRules prepared_rules =
+        prepare_rules(all_rules, token_map, num_sensors);
+    return process_pipeline(records, prepared_rules, inverse_token_map,
+                            state, verbose);
+}
+
+/**
  * @brief Convenience overload: single-pass pipeline (no cross-batch state).
  *
  * Creates a temporary PipelineState internally. Use when processing
@@ -624,10 +739,12 @@ inline ProcessingResult process_pipeline(
     const std::vector<ParsedRecord>& records,
     std::vector<RuleDefinition>& all_rules,
     const std::unordered_map<std::string, int>& token_map,
+    const std::vector<std::string>& inverse_token_map,
     int num_sensors)
 {
     PipelineState state;
-    return process_pipeline(records, all_rules, token_map, num_sensors, state);
+    return process_pipeline(records, all_rules, token_map,
+                            inverse_token_map, num_sensors, state);
 }
 
 } // namespace astralog
