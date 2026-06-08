@@ -284,6 +284,8 @@ void test_batch_flush_keeps_timestamps_intact() {
 } // namespace
 
 int main() {
+
+    std::cout << "Running processing tests...\n";
     omp_set_num_threads(1);
 
     test_strict_output_format();
@@ -293,6 +295,8 @@ int main() {
     test_csv_validation_helpers();
     test_benchmark_mode_disables_audit_files();
     test_batch_flush_keeps_timestamps_intact();
+
+    std::cout << "All tests passed\n";
 
     return 0;
 }
