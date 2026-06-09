@@ -339,22 +339,6 @@ inline std::vector<ParsedRecord> parse_csv_parallel(
     return all_records;
 }
 
-/**
- * @brief Backward-compatible overload for callers that still own a string map.
- */
-inline std::vector<ParsedRecord> parse_csv_parallel(
-    const MappedFile& csv_file,
-    const std::vector<size_t>& line_offsets,
-    const std::unordered_map<std::string, int>& token_map,
-    uint64_t& total_valid,
-    uint64_t& total_invalid)
-{
-    auto inverse_token_map = build_inverse_token_map(token_map);
-    auto token_view_map = build_token_view_map(inverse_token_map);
-    return parse_csv_parallel(csv_file, line_offsets, token_view_map,
-                              total_valid, total_invalid);
-}
-
 } // namespace astralog
 
 #endif // ASTRALOG_CSV_PARSER_HPP
