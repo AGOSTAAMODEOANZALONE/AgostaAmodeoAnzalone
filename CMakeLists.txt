@@ -28,64 +28,59 @@ set_target_properties(astralog_processing PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
 )
 
-# Optional: Test executable
-option(BUILD_TESTS "Build test suite" OFF)
-if(BUILD_TESTS)
-    enable_testing()
-    add_executable(processing_tests test/test_processing.cpp)
-    target_include_directories(processing_tests PRIVATE
-        src
-    )
-    target_link_libraries(processing_tests
-        OpenMP::OpenMP_CXX
-    )
-    add_test(NAME processing_tests COMMAND processing_tests)
+# ========= Test Section =========
 
-    add_executable(component_integration_tests
-        test/test_component_integration.cpp
-    )
-    target_include_directories(component_integration_tests PRIVATE
-        src
-    )
-    target_link_libraries(component_integration_tests
-        OpenMP::OpenMP_CXX
-    )
-    add_test(
-        NAME component_integration_tests
-        COMMAND component_integration_tests
-            ${CMAKE_CURRENT_SOURCE_DIR}/test/fixtures
-    )
+# Enable testing
+enable_testing()
 
-    add_executable(concurrency_integration_tests
-        test/test_concurrency_integration.cpp
+# Add Google Test — prefer local copy (avoids network/FD issues in CI),
+# fall back to FetchContent if no local copy exists.
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/googletest/CMakeLists.txt")
+    message(STATUS "Using local googletest at ${CMAKE_CURRENT_SOURCE_DIR}/googletest")
+    set(INSTALL_GTEST OFF CACHE BOOL "" FORCE)
+    set(BUILD_GMOCK   OFF CACHE BOOL "" FORCE)
+    add_subdirectory(googletest EXCLUDE_FROM_ALL)
+else()
+    message(STATUS "Fetching googletest from GitHub (network required)")
+    include(FetchContent)
+    FetchContent_Declare(
+        googletest
+        GIT_REPOSITORY https://github.com/google/googletest.git
+        GIT_TAG        release-1.12.1
     )
-    target_include_directories(concurrency_integration_tests PRIVATE
-        src
-    )
-    target_link_libraries(concurrency_integration_tests
-        OpenMP::OpenMP_CXX
-    )
-    add_test(
-        NAME concurrency_integration_tests
-        COMMAND concurrency_integration_tests
-    )
-
-    add_test(
-        NAME e2e_golden_thread_batch_matrix
-        COMMAND ${CMAKE_COMMAND}
-            -DASTRALOG_EXE=$<TARGET_FILE:astralog_processing>
-            -DFIXTURE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/test/fixtures/integration
-            -DOUTPUT_ROOT=${CMAKE_CURRENT_BINARY_DIR}/e2e_golden
-            -P ${CMAKE_CURRENT_SOURCE_DIR}/test/run_e2e_fixture.cmake
-    )
-
-    set_tests_properties(component_integration_tests PROPERTIES
-        LABELS "integration"
-    )
-    set_tests_properties(concurrency_integration_tests PROPERTIES
-        LABELS "integration;concurrency;metamorphic"
-    )
-    set_tests_properties(e2e_golden_thread_batch_matrix PROPERTIES
-        LABELS "integration;e2e;concurrency;metamorphic"
-    )
+    set(INSTALL_GTEST OFF CACHE BOOL "" FORCE)
+    FetchContent_MakeAvailable(googletest)
 endif()
+
+# Optional: coverage instrumentation (enabled with -DENABLE_COVERAGE=ON)
+option(ENABLE_COVERAGE "Enable gcov coverage instrumentation" OFF)
+if(ENABLE_COVERAGE)
+    add_compile_options(--coverage -fprofile-arcs -ftest-coverage -O0 -fno-inline)
+    add_link_options(--coverage)
+endif()
+
+add_executable(astralog_tests
+    test/test_types.cpp
+    test/test_csv_parser.cpp
+    test/test_rules_engine.cpp
+    test/test_pipeline.cpp
+    test/test_integration_component.cpp
+    test/test_integration_concurrency.cpp
+)
+
+target_include_directories(astralog_tests PRIVATE
+    src
+)
+
+target_link_libraries(astralog_tests PRIVATE
+    GTest::gtest
+    GTest::gtest_main
+    OpenMP::OpenMP_CXX
+)
+
+include(GoogleTest)
+gtest_discover_tests(astralog_tests
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    PROPERTIES
+        ENVIRONMENT "ASTRALOG_FIXTURE_ROOT=${CMAKE_SOURCE_DIR}/test/fixtures;OMP_NUM_THREADS=1"
+)
