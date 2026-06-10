@@ -5,7 +5,7 @@ on:
   pull_request:
     branches:
       - main
-      - fix/implementatation
+      - fix/implementation
     types: [ opened, synchronize, reopened ]
 
 jobs:
@@ -51,7 +51,7 @@ jobs:
     # Step 6: Run your custom End-to-End Metamorphic and Audit Verification script
     - name: Run End-to-End Verification
       run: |
-        cmake -DASTRALOG_EXE="${{ github.workspace }}/build/bin/astralog" \
+        cmake -DASTRALOG_EXE="${{ github.workspace }}/build/bin/astralog_processing" \
               -DFIXTURE_DIR="${{ env.ASTRALOG_FIXTURE_ROOT }}/integration" \
               -DOUTPUT_ROOT="${{ github.workspace }}/build/e2e_output" \
               -P ${{ github.workspace }}/test/run_e2e_fixture.cmake
