@@ -1,0 +1,171 @@
+name: Post-Merge Copilot Review
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: post-merge-copilot-review-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  review-merged-changes:
+    name: Review merged changes with Copilot
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    env:
+      EVENT_BEFORE: ${{ github.event.before }}
+      HEAD_SHA: ${{ github.sha }}
+      REPOSITORY: ${{ github.repository }}
+
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+
+      - name: Install Copilot CLI
+        run: npm install -g @github/copilot
+
+      - name: Prepare merged change context
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          BASE_SHA="$EVENT_BEFORE"
+          if [[ -z "$BASE_SHA" || "$BASE_SHA" =~ ^0+$ ]]; then
+            BASE_SHA="$(git rev-parse "${HEAD_SHA}^")"
+          fi
+
+          echo "BASE_SHA=$BASE_SHA" >> "$GITHUB_ENV"
+          echo "Reviewing merged range: $BASE_SHA..$HEAD_SHA"
+
+          git log --oneline "$BASE_SHA..$HEAD_SHA" > commits.txt
+          git diff --stat "$BASE_SHA" "$HEAD_SHA" > changed-stat.txt
+          git diff --find-renames --find-copies --unified=80 \
+            "$BASE_SHA" "$HEAD_SHA" > changed.diff
+
+      - name: Find merged pull request
+        id: merged-pr
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          PR_NUMBER="$(gh api \
+            "repos/$REPOSITORY/commits/$HEAD_SHA/pulls" \
+            -H "Accept: application/vnd.github+json" \
+            --jq '.[0].number // empty')"
+
+          echo "number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
+          if [[ -n "$PR_NUMBER" ]]; then
+            echo "Associated merged PR: #$PR_NUMBER"
+          else
+            echo "No associated PR found for $HEAD_SHA"
+          fi
+
+      - name: Run post-merge Copilot review
+        env:
+          COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${COPILOT_GITHUB_TOKEN:-}" ]]; then
+            echo "COPILOT_GITHUB_TOKEN repository secret is required." >&2
+            exit 1
+          fi
+
+          cat > copilot-review-prompt.md <<'EOF'
+          You are performing a detailed post-merge changed-code review.
+
+          Context:
+          - The change has already passed the normal pull request checks and has been merged into main.
+          - Review the exact merged diff in changed.diff.
+          - Use changed-stat.txt and commits.txt for orientation.
+          - You may inspect repository files when needed to understand surrounding code.
+          - Do not edit repository files.
+          - Do not run tests, builds, package installs, or project executables.
+
+          Review goals:
+          - Explain what changed and what improved.
+          - Identify concrete post-merge risks, correctness bugs, build breaks, regressions, data races, memory/resource lifetime problems, and weak/missing tests.
+          - For this C++17/OpenMP telemetry project, pay special attention to parsing, timestamp grouping, rule evaluation, correlation behavior, batching, output formatting, OpenMP concurrency, and cross-batch state persistence.
+          - Avoid style-only comments unless they hide real maintainability or correctness risk.
+
+          Write the review to post-merge-review.md using this Markdown structure:
+
+          # Post-Merge Copilot Review
+
+          ## Changed / Improved
+          Summarize the important changes from the diff.
+
+          ## Findings
+          List concrete issues first, ordered by severity. Include file paths and changed-line context when possible. If no blocking issues are found, say "No blocking changed-code issues found."
+
+          ## Tests And Residual Risk
+          Explain whether the changed areas appear covered by tests and what risk remains after merge.
+
+          ## Reviewer Notes
+          Short practical notes for maintainers.
+          EOF
+
+          copilot -p "$(cat copilot-review-prompt.md)" \
+            --allow-tool='shell(git:*)' \
+            --allow-tool='shell(cat:*)' \
+            --allow-tool='shell(sed:*)' \
+            --allow-tool='shell(grep:*)' \
+            --allow-tool='shell(find:*)' \
+            --allow-tool='shell(wc:*)' \
+            --allow-tool=write \
+            --no-ask-user
+
+          test -s post-merge-review.md
+
+      - name: Publish review to workflow summary
+        shell: bash
+        run: cat post-merge-review.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Comment review on merged PR
+        if: steps.merged-pr.outputs.number != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ steps.merged-pr.outputs.number }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          {
+            echo "## Post-Merge Copilot Review"
+            echo
+            echo "Merged range: \`$BASE_SHA..$HEAD_SHA\`"
+            echo
+            cat post-merge-review.md
+          } > pr-review-comment.md
+
+          gh pr comment "$PR_NUMBER" \
+            --repo "$REPOSITORY" \
+            --body-file pr-review-comment.md
+
+      - name: Upload review artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: post-merge-copilot-review
+          path: |
+            commits.txt
+            changed-stat.txt
+            changed.diff
+            post-merge-review.md
+          if-no-files-found: error
