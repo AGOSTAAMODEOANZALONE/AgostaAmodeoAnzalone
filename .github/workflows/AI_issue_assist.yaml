@@ -2,14 +2,16 @@ name: AI Issue Triage
 
 on:
   issues:
-    types: [labeled]
+    types: [opened, labeled]
 
 jobs:
   ai-triage:
-    if: github.event.label.name == 'request ai review'
+    if: contains(github.event.issue.labels.*.name, 'request ai review')
     runs-on: ubuntu-latest
     permissions:
+      contents: read
       issues: write
+      models: read
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -17,9 +19,9 @@ jobs:
       - name: AI Assessment Comment Labeler
         uses: github/ai-assessment-comment-labeler@v1.0.1
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.GITHUB_TOKEN }}
           prompts_directory: "./.github/prompts"
-          labels_to_prompts_mapping: "default,Issue_evaluator.prompt"
+          labels_to_prompts_mapping: "default,issue-evaluator.prompt.yml"
           ai_review_label: "request ai review"
           issue_number: ${{ github.event.issue.number }}
           issue_body: ${{ github.event.issue.body }}
