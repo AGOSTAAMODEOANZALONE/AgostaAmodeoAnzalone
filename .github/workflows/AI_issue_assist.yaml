@@ -2,10 +2,11 @@ name: AI Issue Triage
 
 on:
   issues:
-    types: [opened, edited]
+    types: [labeled]
 
 jobs:
   ai-triage:
+    if: github.event.label.name == 'request ai review'
     runs-on: ubuntu-latest
     permissions:
       issues: write
@@ -19,5 +20,6 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           prompts_directory: ".github/prompts"
           labels_to_prompts_mapping: "default,Issue_evaluator.prompt"
+          ai_review_label: "request ai review"
           issue_number: ${{ github.event.issue.number }}
           issue_body: ${{ github.event.issue.body }}
