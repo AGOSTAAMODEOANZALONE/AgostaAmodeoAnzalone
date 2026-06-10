@@ -711,42 +711,6 @@ inline ProcessingResult process_pipeline(
     return result;
 }
 
-/**
- * @brief Backward-compatible overload that prepares rules for this call.
- */
-inline ProcessingResult process_pipeline(
-    const std::vector<ParsedRecord>& records,
-    std::vector<RuleDefinition>& all_rules,
-    const std::unordered_map<std::string, int>& token_map,
-    const std::vector<std::string>& inverse_token_map,
-    int num_sensors,
-    PipelineState& state,
-    bool verbose = true)
-{
-    PreparedRules prepared_rules =
-        prepare_rules(all_rules, token_map, num_sensors);
-    return process_pipeline(records, prepared_rules, inverse_token_map,
-                            state, verbose);
-}
-
-/**
- * @brief Convenience overload: single-pass pipeline (no cross-batch state).
- *
- * Creates a temporary PipelineState internally. Use when processing
- * the entire file as one batch (backward-compatible with pre-batching code).
- */
-inline ProcessingResult process_pipeline(
-    const std::vector<ParsedRecord>& records,
-    std::vector<RuleDefinition>& all_rules,
-    const std::unordered_map<std::string, int>& token_map,
-    const std::vector<std::string>& inverse_token_map,
-    int num_sensors)
-{
-    PipelineState state;
-    return process_pipeline(records, all_rules, token_map,
-                            inverse_token_map, num_sensors, state);
-}
-
 } // namespace astralog
 
 #endif // ASTRALOG_TIMESTAMP_PROCESSOR_HPP
