@@ -26,20 +26,21 @@ using namespace astralog;
 using namespace astralog::test;
 
 // ===========================================================================
-// rules_engine.hpp — sort_rules_by_priority
+// rules_engine.hpp — sort_by_priority
 // ===========================================================================
 
 TEST(RulesEngineTest, SortRulesByPriority) {
-    std::vector<RuleDefinition> rules(3);
-    rules[0].priority = Priority::LOW;
-    rules[1].priority = Priority::HIGH;
-    rules[2].priority = Priority::MEDIUM;
+    RuleDefinition low    = make_rule("R1", RuleType::THRESHOLD, "S1", CompOp::GT, 1.0, Priority::LOW);
+    RuleDefinition medium = make_rule("R2", RuleType::THRESHOLD, "S2", CompOp::GT, 2.0, Priority::MEDIUM);
+    RuleDefinition high   = make_rule("R3", RuleType::THRESHOLD, "S3", CompOp::GT, 3.0, Priority::HIGH);
 
-    sort_rules_by_priority(rules);
+    std::vector<const RuleDefinition*> rules = {&low, &medium, &high};
 
-    EXPECT_EQ(rules[0].priority, Priority::HIGH);
-    EXPECT_EQ(rules[1].priority, Priority::MEDIUM);
-    EXPECT_EQ(rules[2].priority, Priority::LOW);
+    sort_by_priority(rules);
+
+    EXPECT_EQ(rules[0]->priority, Priority::HIGH);
+    EXPECT_EQ(rules[1]->priority, Priority::MEDIUM);
+    EXPECT_EQ(rules[2]->priority, Priority::LOW);
 }
 
 TEST(RulesEngineTest, SortByPriorityPointers) {
