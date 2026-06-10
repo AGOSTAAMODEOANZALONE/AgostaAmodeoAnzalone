@@ -1,0 +1,23 @@
+name: AI Issue Triage
+
+on:
+  issues:
+    types: [opened, edited]
+
+jobs:
+  ai-triage:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: AI Assessment Comment Labeler
+        uses: github/ai-assessment-comment-labeler@v1.0.1
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          prompts_directory: ".github/prompts"
+          labels_to_prompts_mapping: "default,Issue_evaluator.prompt"
+          issue_number: ${{ github.event.issue.number }}
+          issue_body: ${{ github.event.issue.body }}
