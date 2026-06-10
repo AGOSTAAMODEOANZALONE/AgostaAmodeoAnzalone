@@ -18,7 +18,7 @@ jobs:
         uses: github/ai-assessment-comment-labeler@v1.0.1
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
-          prompts_directory: ".github/prompts"
+          prompts_directory: "./.github/prompts"
           labels_to_prompts_mapping: "default,Issue_evaluator.prompt"
           ai_review_label: "request ai review"
           issue_number: ${{ github.event.issue.number }}
