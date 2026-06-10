@@ -28,6 +28,6 @@ messages:
   - role: user
     content: "{{input}}"
 
-model: "gpt-4o"
+model: "openai/gpt-4o"
 modelParameters:
   max_tokens: 1000

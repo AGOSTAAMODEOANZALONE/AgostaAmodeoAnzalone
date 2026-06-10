@@ -21,7 +21,8 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           prompts_directory: "./.github/prompts"
-          labels_to_prompts_mapping: "default,issue-evaluator.prompt.yml"
+          labels_to_prompts_mapping: "request ai review,issue-evaluator.prompt.yml"
           ai_review_label: "request ai review"
           issue_number: ${{ github.event.issue.number }}
           issue_body: ${{ github.event.issue.body }}
+          assessment_regex_pattern: '^Assessment:\s*(.+)$'
