@@ -1,0 +1,57 @@
+name: Pull Request Verification
+
+# Trigger the workflow only when a PR is opened or updated against the main branch
+on:
+  pull_request:
+    branches:
+      - main
+      - fix/implementation
+    types: [ opened, synchronize, reopened ]
+
+jobs:
+  # This job name 'execute-tests' is what you will look for in your Ruleset configuration later
+  execute-tests:
+    name: Run C++ Test Suite & E2E Validation
+    runs-on: ubuntu-latest
+
+    env:
+      BUILD_TYPE: Release
+      ASTRALOG_FIXTURE_ROOT: ${{ github.workspace }}/test/fixtures
+
+    steps:
+    # Step 1: Clone the PR branch code onto the GitHub runner
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    # Step 2: Install system dependencies (OpenMP and Google Test developer packages)
+    - name: Install System Dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential cmake libomp-dev
+
+    # Step 3: Configure CMake and generate the build files
+    - name: Configure CMake
+      run: |
+        cmake -B ${{ github.workspace }}/build \
+          -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }}
+
+    # Step 4: Compile the binary executables and test suites
+    - name: Build Project
+      run: |
+        cmake --build ${{ github.workspace }}/build \
+          --config ${{ env.BUILD_TYPE }} \
+          --parallel 1
+
+    # Step 5: Run the Google Test unit and integration suites
+    - name: Run Unit & Integration Tests
+      working-directory: ${{ github.workspace }}/build
+      run: |
+        ctest --output-on-failure
+
+    # Step 6: Run your custom End-to-End Metamorphic and Audit Verification script
+    - name: Run End-to-End Verification
+      run: |
+        cmake -DASTRALOG_EXE="${{ github.workspace }}/build/bin/astralog_processing" \
+              -DFIXTURE_DIR="${{ env.ASTRALOG_FIXTURE_ROOT }}/integration" \
+              -DOUTPUT_ROOT="${{ github.workspace }}/build/e2e_output" \
+              -P ${{ github.workspace }}/test/run_e2e_fixture.cmake

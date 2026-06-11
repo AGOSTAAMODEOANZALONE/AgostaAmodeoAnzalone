@@ -333,18 +333,6 @@ inline void sort_by_priority(std::vector<const RuleDefinition*>& rules) {
               });
 }
 
-/**
- * @brief Sort all rule vectors by priority within each type.
- *
- * Operates on the four categorised rule vectors (by pointer).
- */
-inline void sort_rules_by_priority(std::vector<RuleDefinition>& rules) {
-    auto cmp = [](const RuleDefinition& a, const RuleDefinition& b) {
-        return static_cast<int>(a.priority) > static_cast<int>(b.priority);
-    };
-    std::sort(rules.begin(), rules.end(), cmp);
-}
-
 // ===========================================================================
 // Sensor token mapping
 // ===========================================================================
