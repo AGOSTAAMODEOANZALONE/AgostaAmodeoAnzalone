@@ -1,0 +1,32 @@
+Bootstrap: docker
+From: ubuntu:22.04
+
+%labels
+    Author AstraLog-HPC Team (Agosta, Amodeo, Anzalone)
+    Version 2.0
+    Description AstraLog-HPC Single-Node OpenMP Engine for CINECA G100
+
+%post
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update && apt-get install -y \
+        g++ cmake make \
+        libomp-dev \
+        && rm -rf /var/lib/apt/lists/*
+
+%files
+    src/ /opt/astralog/src/
+    input/ /opt/astralog/input/
+    CMakeLists.txt /opt/astralog/CMakeLists.txt
+
+%post
+    cd /opt/astralog && mkdir -p build && cd build \
+        && cmake .. -DCMAKE_BUILD_TYPE=Release \
+        && make -j$(nproc)
+
+%environment
+    export PATH=/opt/astralog/build/bin:$PATH
+
+%runscript
+    echo "AstraLog-HPC container (v2.0 — Single-Node OpenMP)"
+    echo "Usage: astralog_processing --csv <path> [--rules <path>] [--sensors <path>]"
+    exec astralog_processing "$@"
