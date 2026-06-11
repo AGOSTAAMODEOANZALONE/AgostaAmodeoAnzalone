@@ -22,7 +22,7 @@ jobs:
 
       - name: Build Apptainer Image
         run: |
-          apptainer build astralog.sif Singularity.def
+          sudo apptainer build astralog.sif Singularity.def
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
