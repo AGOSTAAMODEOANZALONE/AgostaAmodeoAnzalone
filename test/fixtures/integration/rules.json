@@ -1,0 +1,41 @@
+[
+  {
+    "rule_id": "R001",
+    "type": "simple",
+    "sensor_id": "S-A",
+    "operator": ">",
+    "value": 50.0,
+    "priority": "HIGH"
+  },
+  {
+    "rule_id": "R002",
+    "type": "step_difference",
+    "sensor_id": "S-B",
+    "operator": "<",
+    "value": -2.0,
+    "priority": "MEDIUM"
+  },
+  {
+    "rule_id": "R003",
+    "type": "stateful",
+    "sensor_id": "S-C",
+    "operator": "<",
+    "value": 20.0,
+    "priority": "LOW",
+    "consecutive_measurements": 3
+  },
+  {
+    "rule_id": "R004",
+    "type": "correlation",
+    "logic": "AND",
+    "conditions": ["R001", "R002"],
+    "priority": "HIGH"
+  },
+  {
+    "rule_id": "R005",
+    "type": "correlation",
+    "logic": "OR",
+    "conditions": ["R001", "R003"],
+    "priority": "MEDIUM"
+  }
+]
