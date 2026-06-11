@@ -14,15 +14,13 @@ From: ubuntu:22.04
         && rm -rf /var/lib/apt/lists/*
 
 %files
-    src/ /opt/astralog/src/
-    input/ /opt/astralog/input/
-    test/ /opt/astralog/test/
-    googletest/ /opt/astralog/googletest/
+    src /opt/astralog/src
+    input /opt/astralog/input
     CMakeLists.txt /opt/astralog/CMakeLists.txt
 
 %post
     cd /opt/astralog && mkdir -p build && cd build \
-        && cmake .. -DCMAKE_BUILD_TYPE=Release \
+        && cmake .. -DCMAKE_BUILD_TYPE=Release -DASTRALOG_ARCH=x86-64-v3 -DBUILD_TESTING=OFF \
         && make -j$(nproc)
 
 %environment

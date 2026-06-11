@@ -91,9 +91,9 @@ echo "============================================================="
 # === Create output directory ===
 mkdir -p "${OUTPUT_DIR}"
 
-# === Build (if build directory doesn't exist) ===
-if [ ! -f "${EXECUTABLE}" ]; then
-    echo "[job] Executable not found. Building..."
+# === Build (if build directory doesn't exist and no container) ===
+if [ ! -f "${CONTAINER}" ] && [ ! -f "${EXECUTABLE}" ]; then
+    echo "[job] Container and executable not found. Building natively..."
     mkdir -p build
     cd build
     cmake .. -DCMAKE_BUILD_TYPE=Release
@@ -108,7 +108,13 @@ START_TIME=$(date +%s%N)
 
 if [ -f "${CONTAINER}" ]; then
     echo "[job] Running inside Singularity container: ${CONTAINER}"
-    singularity exec "${CONTAINER}" "${EXECUTABLE}" "${RUN_ARGS[@]}"
+    # The binary inside the container is just 'astralog_processing' (it's in the PATH)
+    # We use apptainer if available, falling back to singularity
+    if command -v apptainer &> /dev/null; then
+        apptainer exec "${CONTAINER}" astralog_processing "${RUN_ARGS[@]}"
+    else
+        singularity exec "${CONTAINER}" astralog_processing "${RUN_ARGS[@]}"
+    fi
 else
     echo "[job] Running native executable"
     "${EXECUTABLE}" "${RUN_ARGS[@]}"
