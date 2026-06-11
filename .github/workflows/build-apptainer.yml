@@ -22,7 +22,7 @@ jobs:
 
       - name: Build Apptainer Image
         run: |
-          apptainer build astralog.sif Singularity.def
+          sudo apptainer build astralog.sif Singularity.def
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
@@ -30,3 +30,40 @@ jobs:
           name: astralog-sif-image
           path: astralog.sif
           retention-days: 7
+
+  deploy:
+    name: Deploy to CINECA G100
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository (for job.sh and input files)
+        uses: actions/checkout@v4
+
+      - name: Download Apptainer Image
+        uses: actions/download-artifact@v4
+        with:
+          name: astralog-sif-image
+          path: .
+
+      - name: Setup SSH Keys and Certificate
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.CINECA_SSH_KEY }}" > ~/.ssh/id_cineca
+          chmod 600 ~/.ssh/id_cineca
+          # If using a short-lived step-ca certificate, place it here:
+          echo "${{ secrets.CINECA_SSH_CERT }}" > ~/.ssh/id_cineca-cert.pub
+          chmod 644 ~/.ssh/id_cineca-cert.pub
+          ssh-keyscan -H login.g100.cineca.it >> ~/.ssh/known_hosts
+
+      - name: Copy Files to CINECA (Native SCP)
+        run: |
+          scp -i ~/.ssh/id_cineca -r astralog.sif job.sh input/ ${{ secrets.CINECA_USERNAME }}@login.g100.cineca.it:~/astralog_project/
+
+      - name: Submit Job on SLURM (Native SSH)
+        run: |
+          ssh -i ~/.ssh/id_cineca ${{ secrets.CINECA_USERNAME }}@login.g100.cineca.it << 'EOF'
+            cd ~/astralog_project
+            module load apptainer || echo "Module already loaded"
+            echo "Submitting SLURM job..."
+            sbatch job.sh
+          EOF
