@@ -58,11 +58,11 @@ jobs:
 
       - name: Copy Files to CINECA (Native SCP)
         run: |
-          scp -o StrictHostKeyChecking=no -i ~/.ssh/id_cineca -r astralog.sif job.sh input/ ${{ secrets.CINECA_USERNAME }}@login.g100.cineca.it:~/astralog_project/
+          scp -o StrictHostKeyChecking=no -o CertificateFile=~/.ssh/id_cineca-cert.pub -i ~/.ssh/id_cineca -r astralog.sif job.sh input/ ${{ secrets.CINECA_USERNAME }}@login.g100.cineca.it:~/astralog_project/
 
       - name: Submit Job on SLURM (Native SSH)
         run: |
-          ssh -o StrictHostKeyChecking=no -i ~/.ssh/id_cineca ${{ secrets.CINECA_USERNAME }}@login.g100.cineca.it << 'EOF'
+          ssh -o StrictHostKeyChecking=no -o CertificateFile=~/.ssh/id_cineca-cert.pub -i ~/.ssh/id_cineca ${{ secrets.CINECA_USERNAME }}@login.g100.cineca.it << 'EOF'
             cd ~/astralog_project
             module load apptainer || echo "Module already loaded"
             echo "Submitting SLURM job..."
