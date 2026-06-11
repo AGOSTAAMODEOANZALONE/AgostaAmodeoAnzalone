@@ -46,12 +46,14 @@ jobs:
           path: .
 
       - name: Setup SSH Keys and Certificate
+        env:
+          SSH_KEY: ${{ secrets.CINECA_SSH_KEY }}
+          SSH_CERT: ${{ secrets.CINECA_SSH_CERT }}
         run: |
           mkdir -p ~/.ssh
-          echo "${{ secrets.CINECA_SSH_KEY }}" > ~/.ssh/id_cineca
+          echo "$SSH_KEY" > ~/.ssh/id_cineca
           chmod 600 ~/.ssh/id_cineca
-          # If using a short-lived step-ca certificate, place it here:
-          echo "${{ secrets.CINECA_SSH_CERT }}" > ~/.ssh/id_cineca-cert.pub
+          echo "$SSH_CERT" > ~/.ssh/id_cineca-cert.pub
           chmod 644 ~/.ssh/id_cineca-cert.pub
 
       - name: Copy Files to CINECA (Native SCP)
