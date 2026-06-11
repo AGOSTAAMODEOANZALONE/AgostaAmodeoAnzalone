@@ -16,6 +16,8 @@ From: ubuntu:22.04
 %files
     src/ /opt/astralog/src/
     input/ /opt/astralog/input/
+    test/ /opt/astralog/test/
+    googletest/ /opt/astralog/googletest/
     CMakeLists.txt /opt/astralog/CMakeLists.txt
 
 %post
