@@ -5,13 +5,12 @@ on:
   pull_request:
     branches:
       - main
-      - fix/implementation
     types: [ opened, synchronize, reopened ]
 
 jobs:
   # This job name 'execute-tests' is what you will look for in your Ruleset configuration later
   execute-tests:
-    name: Run C++ Test Suite & E2E Validation
+    name: Run C++ Test Suite
     runs-on: ubuntu-latest
 
     env:
@@ -33,7 +32,8 @@ jobs:
     - name: Configure CMake
       run: |
         cmake -B ${{ github.workspace }}/build \
-          -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }}
+          -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} \
+          -DCI=ON
 
     # Step 4: Compile the binary executables and test suites
     - name: Build Project
@@ -43,7 +43,7 @@ jobs:
           --parallel 1
 
     # Step 5: Run the Google Test unit and integration suites
-    - name: Run Unit & Integration Tests
+    - name: Run Integration & Concurrency Tests
       working-directory: ${{ github.workspace }}/build
       run: |
         ctest --output-on-failure

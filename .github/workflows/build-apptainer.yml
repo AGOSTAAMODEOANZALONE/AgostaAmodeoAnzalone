@@ -8,7 +8,7 @@ on:
   workflow_dispatch: # Allows you to manually trigger the build from the GitHub UI
 
 jobs:
-  build:
+  build: # This first step uses apptainer to build the .sif image
     runs-on: ubuntu-latest
 
     steps:
@@ -20,7 +20,7 @@ jobs:
         with:
           apptainer-version: 1.3.1
 
-      - name: Build Apptainer Image
+      - name: Build Apptainer Image # Here sudo can be used because of github settings
         run: |
           sudo apptainer build astralog.sif Singularity.def
 
@@ -45,7 +45,7 @@ jobs:
           name: astralog-sif-image
           path: .
 
-      - name: Setup SSH Keys and Certificate
+      - name: Setup SSH Keys and Certificate # For this step to work both secrets must be updated
         env:
           SSH_KEY: ${{ secrets.CINECA_SSH_KEY }}
           SSH_CERT: ${{ secrets.CINECA_SSH_CERT }}
@@ -56,13 +56,15 @@ jobs:
           echo "$SSH_CERT" > ~/.ssh/id_cineca-cert.pub
           chmod 644 ~/.ssh/id_cineca-cert.pub
 
-      - name: Copy Files to CINECA (Native SCP)
+      - name: Copy Files to CINECA (Native SCP) # The option StrictHostKeyChecking=no 
+                                                # enables MITM attacks but is the only way to manage key changes
+                                                # on Github runner
         run: |
-          scp -o StrictHostKeyChecking=no -o CertificateFile=~/.ssh/id_cineca-cert.pub -i ~/.ssh/id_cineca -r astralog.sif job.sh input/ ${{ secrets.CINECA_USERNAME }}@login.g100.cineca.it:~/astralog_project/
+          scp -v -o StrictHostKeyChecking=no -o CertificateFile=~/.ssh/id_cineca-cert.pub -i ~/.ssh/id_cineca -r astralog.sif job.sh input/ ${{ secrets.CINECA_USERNAME }}@login.g100.cineca.it:~/astralog_project/
 
       - name: Submit Job on SLURM (Native SSH)
         run: |
-          ssh -o StrictHostKeyChecking=no -o CertificateFile=~/.ssh/id_cineca-cert.pub -i ~/.ssh/id_cineca ${{ secrets.CINECA_USERNAME }}@login.g100.cineca.it << 'EOF'
+          ssh -v -o StrictHostKeyChecking=no -o CertificateFile=~/.ssh/id_cineca-cert.pub -i ~/.ssh/id_cineca ${{ secrets.CINECA_USERNAME }}@login.g100.cineca.it << 'EOF'
             cd ~/astralog_project
             module load apptainer || echo "Module already loaded"
             echo "Submitting SLURM job..."
