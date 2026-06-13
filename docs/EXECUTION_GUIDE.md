@@ -43,22 +43,16 @@ Run a specific CSV:
 CSV_PATH=input/telemetry/export_sat_alpha_large.csv bash build_and_run.sh --benchmark
 ```
 
-Run the fixed timestamp CSV:
-
-```bash
-CSV_PATH=input/telemetry/export_sat_alpha_large_fixed.csv bash build_and_run.sh --benchmark
-```
-
 Set batch size:
 
 ```bash
-BATCH_SIZE=100000 CSV_PATH=input/telemetry/export_sat_alpha_large_fixed.csv bash build_and_run.sh --benchmark
+BATCH_SIZE=100000 CSV_PATH=input/telemetry/export_sat_alpha_large.csv bash build_and_run.sh --benchmark
 ```
 
 Set number of OpenMP threads:
 
 ```bash
-THREADS=8 CSV_PATH=input/telemetry/export_sat_alpha_large_fixed.csv bash build_and_run.sh --benchmark
+THREADS=8 CSV_PATH=input/telemetry/export_sat_alpha_large.csv bash build_and_run.sh --benchmark
 ```
 
 Useful environment variables for `build_and_run.sh`:
@@ -75,39 +69,7 @@ BATCH_SIZE        default: 1000
 BATCH_INTERVAL    default: 5000
 ```
 
-## 2. Fixing Repeated Timestamps
-
-Some provided telemetry files contain repeated timestamps. The helper script `input/telemetry/fix.sh` generates a new file where timestamps are incremented every 12 lines.
-
-Generate a fixed file:
-
-```bash
-cd input/telemetry
-bash fix.sh export_sat_alpha_large.csv
-cd ../..
-```
-
-This creates:
-
-```text
-input/telemetry/export_sat_alpha_large_fixed.csv
-```
-
-Use the fixed CSV locally:
-
-```bash
-CSV_PATH=input/telemetry/export_sat_alpha_large_fixed.csv bash build_and_run.sh --benchmark
-```
-
-Use the fixed CSV on the cluster:
-
-```bash
-sbatch --export=ALL,CSV_PATH=input/telemetry/export_sat_alpha_large_fixed.csv job.sh
-```
-
-Generated `*_fixed.csv` files are ignored by Git.
-
-## 3. Cluster Execution with SLURM
+## 2. Cluster Execution with SLURM
 
 Use `job.sh` for real HPC benchmark numbers. It runs on a compute node with one task and 48 OpenMP threads.
 
@@ -123,16 +85,16 @@ Submit the default cluster job:
 sbatch job.sh
 ```
 
-Submit with the fixed CSV:
+Submit with a specific CSV:
 
 ```bash
-sbatch --export=ALL,CSV_PATH=input/telemetry/export_sat_alpha_large_fixed.csv job.sh
+sbatch --export=ALL,CSV_PATH=input/telemetry/export_sat_alpha_large.csv job.sh
 ```
 
-Submit with fixed CSV and explicit batch size:
+Submit with custom CSV and explicit batch size:
 
 ```bash
-sbatch --export=ALL,CSV_PATH=input/telemetry/export_sat_alpha_large_fixed.csv,BATCH_SIZE=100000 job.sh
+sbatch --export=ALL,CSV_PATH=input/telemetry/export_sat_alpha_large.csv,BATCH_SIZE=100000 job.sh
 ```
 
 Keep batch audit files enabled:
@@ -144,7 +106,7 @@ sbatch --export=ALL,BENCHMARK=0 job.sh
 Important: `sbatch` options must be placed before `job.sh`. This is correct:
 
 ```bash
-sbatch --export=ALL,CSV_PATH=input/telemetry/export_sat_alpha_large_fixed.csv job.sh
+sbatch --export=ALL,CSV_PATH=input/telemetry/export_sat_alpha_large.csv job.sh
 ```
 
 Check job status:
@@ -183,7 +145,7 @@ BATCH_INTERVAL    default: 5000
 BENCHMARK         default: 1
 ```
 
-## 4. Profiling
+## 3. Profiling
 
 Profiling and benchmarking are different:
 
@@ -204,19 +166,19 @@ This changes the binary and makes it slower. Use profiling output to understand 
 Run profiling locally or on a login node:
 
 ```bash
-CSV_PATH=input/telemetry/export_sat_alpha_large_fixed.csv bash profile_gprof.sh
+CSV_PATH=input/telemetry/export_sat_alpha_large.csv bash profile_gprof.sh
 ```
 
 Profile with one thread to get a cleaner `gprof` call graph:
 
 ```bash
-THREADS=1 CSV_PATH=input/telemetry/export_sat_alpha_large_fixed.csv bash profile_gprof.sh
+THREADS=1 CSV_PATH=input/telemetry/export_sat_alpha_large.csv bash profile_gprof.sh
 ```
 
 Profile with a custom batch size:
 
 ```bash
-BATCH_SIZE=100000 CSV_PATH=input/telemetry/export_sat_alpha_large_fixed.csv bash profile_gprof.sh
+BATCH_SIZE=100000 CSV_PATH=input/telemetry/export_sat_alpha_large.csv bash profile_gprof.sh
 ```
 
 Profiling output is written to:
@@ -236,7 +198,7 @@ Run profiling on a compute node through SLURM:
 
 ```bash
 sbatch --cpus-per-task=48 --nodes=1 --time=00:30:00 --partition=g100_usr_prod \
-  --export=ALL,CSV_PATH=input/telemetry/export_sat_alpha_large_fixed.csv \
+  --export=ALL,CSV_PATH=input/telemetry/export_sat_alpha_large.csv \
   --wrap="cd $PWD && bash profile_gprof.sh"
 ```
 
@@ -247,7 +209,7 @@ Notes about `gprof`:
 - Use `THREADS=1` when you want cleaner function attribution.
 - Use `job.sh` when you need final report performance numbers.
 
-## 5. Build and Test
+## 4. Build and Test
 
 Build and run tests manually:
 
@@ -260,7 +222,7 @@ cmake --build build_test -j
 ctest --test-dir build_test --output-on-failure
 ```
 
-## 6. Recommended Final Workflow
+## 5. Recommended Final Workflow
 
 For final correctness and performance collection:
 
@@ -270,15 +232,11 @@ cd ~/AgostaAmodeoAnzalone
 module load gcc/12.2.0
 module load cmake/3.27.7
 
-cd input/telemetry
-bash fix.sh export_sat_alpha_large.csv
-cd ../..
-
 cmake -S . -B build_test -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=ON
 cmake --build build_test -j
 ctest --test-dir build_test --output-on-failure
 
-sbatch --export=ALL,CSV_PATH=input/telemetry/export_sat_alpha_large_fixed.csv job.sh
+sbatch --export=ALL,CSV_PATH=input/telemetry/export_sat_alpha_large.csv job.sh
 ```
 
 After the job finishes:
