@@ -215,6 +215,8 @@ The test suite covers the following areas:
 8. **Per-timestamp grouping**: Tests that NOMINAL is only emitted when zero rules fire, and that any violation suppresses the NOMINAL line.
 9. **Batch boundary safety**: Tests that count-based flushing waits until a timestamp is complete.
 10. **Benchmark mode**: Tests that audit files are skipped when benchmark mode disables them.
+11. **Concurrency determinism**: Verifies OpenMP thread safety by ensuring output is identical regardless of thread count, batch size, or repeated parallel execution without race conditions.
+12. **Component integration & E2E**: Tests the data flow across all modules (YAML → CSV → Rule Engine → Formatter) and performs bit-for-bit end-to-end diffs against gold standard fixtures in CI.
 
 ---
 
@@ -231,9 +233,17 @@ The pipeline is configured in `.github/workflows/` and automates the verificatio
      - Executes an end-to-end integration and metamorphic test runner (`run_e2e_fixture.cmake`) verifying byte-for-byte correctness across varying thread counts and batch sizes.
 
 2. **Apptainer Image Build & HPC Deployment (`build-apptainer.yml`)**
-   - **Trigger**: Runs on pushes to `main` or via manual triggers.
+   - **Trigger**: Runs on pushes to `main`, pull requests against `main`, or via manual triggers (`workflow_dispatch`).
    - **Build**: Compiles the Apptainer container image `astralog.sif` from `Singularity.def` using a setup action on an Ubuntu runner.
    - **HPC Deployment**: Deploys the built `.sif` image, along with `job.sh` and inputs, to the CINECA Galileo 100 cluster via `scp` using SSH keys and certificates stored in GitHub Secrets. It then triggers `ssh` to load the container execution module and submit the SLURM job via `sbatch job.sh`.
+
+3. **Post-Merge AI Code Review (`AI_code_review.yaml`)**
+   - **Trigger**: Runs on pushes to `main` or via manual triggers (`workflow_dispatch`).
+   - **Execution**: Uses the GitHub Copilot CLI to analyze merged code diffs against the `main` branch. It identifies potential correctness issues, memory/resource leaks, or missing tests, and automatically posts a detailed review comment on the associated pull request.
+
+4. **AI Issue Assistant (`AI_issue_assist.yaml`)**
+   - **Trigger**: Runs automatically when a new issue is `opened`.
+   - **Execution**: Uses the `actions/ai-inference` GitHub Action to analyze new issues for completeness. It automatically posts a helpful comment directly on the issue with suggestions and clarifying questions to ensure all necessary information is provided.
 
 ---
 
@@ -300,10 +310,6 @@ All AI-generated outputs were critically reviewed, tested, and adapted to ensure
 ## Local Setup & Usage
 
 ### Prerequisites
-
-For a complete command reference covering local execution, SLURM execution,
-fixed timestamp preprocessing, profiling, and tests, see
-`docs/EXECUTION_GUIDE.md`.
 
 - C++17 compatible compiler (e.g., `g++ >= 7`)
 - `cmake >= 3.16`
