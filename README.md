@@ -10,11 +10,9 @@ This repository contains the **Full Track** solution for the **AstraLog-HPC** pr
 
 | Name | Person Code | Role | Effort (Hours) |
 | :--- | :--- | :--- | :--- |
-| **Francesco Agosta** | <!-- TODO: insert --> | DevOps, CI/CD Pipeline & SLURM Integration | <!-- TODO --> |
-| **Gabriele Amodeo** | <!-- TODO: insert --> | Software Architect & Core Engine Development | <!-- TODO --> |
-| **Antonello Anzalone** | <!-- TODO: insert --> | QA, Testing & Containerization | <!-- TODO --> |
-
-<!-- TODO: Fill in person codes and actual effort hours before submission -->
+| **Francesco Agosta** | 10898065 | Testing, Software & CI/CD Supervisor | 90h |
+| **Gabriele Amodeo** | 10829738 | CI/CD, Software & Testing Supervisor | 80h |
+| **Antonello Anzalone** | 10892053 | Software, Testing & CI/CD Supervisor | 100h |
 
 ---
 
@@ -50,10 +48,12 @@ No external libraries are required beyond the C++ standard library and OpenMP. J
 ```text
 .
 ├── CMakeLists.txt              # Build configuration (C++17, OpenMP)
+├── Doxyfile                    # Doxygen API documentation configuration
 ├── Singularity.def             # Container definition (g++, cmake, OpenMP)
 ├── job.sh                      # SLURM script for Galileo 100
 ├── LICENSE                     # MIT License
 ├── build_and_run.sh            # Local build/run script with clean and benchmark modes
+├── build_apptainer.sh          # Build Apptainer image locally using Docker (macOS friendly)
 ├── profile_gprof.sh            # Optional gprof profiling script
 │
 ├── src/                        # Source code
@@ -66,8 +66,16 @@ No external libraries are required beyond the C++ standard library and OpenMP. J
 │   ├── timestamp_processor.hpp # 5-phase parallel processing pipeline
 │   └── output_formatter.hpp    # Spec-compliant output formatting
 │
-├── test/                       # Test suite
-│   └── test_processing.cpp
+├── test/                       # Comprehensive test suite
+│   ├── fixtures/               # Test cases inputs and expected outputs
+│   ├── run_e2e_fixture.cmake   # CMake end-to-end verification script
+│   ├── test_csv_parser.cpp     # CSV parsing unit tests
+│   ├── test_helpers.hpp        # Helper utilities for tests
+│   ├── test_integration_component.cpp   # Integration tests between components
+│   ├── test_integration_concurrency.cpp # OpenMP concurrency & metamorphic tests
+│   ├── test_pipeline.cpp       # Processing pipeline integration tests
+│   ├── test_rules_engine.cpp   # Rules engine evaluation unit tests
+│   └── test_types.cpp          # Data types unit tests
 │
 ├── input/                      # Input data
 │   ├── sensors_SAT_ALPHA.yaml  # Sensor configuration (12 sensors)
@@ -75,11 +83,13 @@ No external libraries are required beyond the C++ standard library and OpenMP. J
 │   └── telemetry/              # CSV telemetry data files
 │       ├── export_sat_alpha_small.csv   (430 KB)
 │       ├── export_sat_alpha_medium.csv  (4.3 MB)
-│       ├── export_sat_alpha_large.csv   (43 MB)
-│       └── fix.sh                       # Timestamp-fixing helper script
+│       └── export_sat_alpha_large.csv   (43 MB)
 │
 ├── docs/                       # Documentation
-│   └── AmodeoAnzaloneAgosta.pdf  # Requirement analysis & design document
+│   ├── EXECUTION_GUIDE.md       # Running guide locally, on cluster, and profiling
+│   ├── TESTING_IMPROVEMENTS.md  # Detailed testing suite summary report
+│   ├── A_Y__2025_2026_Software_Engineering_for_AstraLog_HPC_Project_v_2_0.pdf # Updated version of the Requirement analysis & design document
+│   └── doxygen_latex__1_.pdf    # Generated Doxygen API documentation in PDF format
 │
 └── output/                     # Generated outputs (gitignored)
     ├── valid_data.csv
@@ -133,12 +143,12 @@ CSV File → mmap → Parallel Parse → Valid Records
                                BatchAccumulator
                               (count or time flush)
                                         ↓
-                          ┌─────────────────────────┐
-                          │  for each flushed batch: │
-                          │    → write audit .txt*   │
-                          │    → process_pipeline()  │
-                          │    → append output files │
-                          └─────────────────────────┘
+                          ┌───────────────────────────┐
+                          │  for each flushed batch:  │
+                          │    → write audit .txt*    │
+                          │    → process_pipeline()   │
+                          │    → append output files  │
+                          └───────────────────────────┘
                                         ↓
                               valid_data.csv + alarms.log
 ```
@@ -189,15 +199,16 @@ Correlation    ←─────────────      needs all sub-rul
 
 ### Performance
 
-On the CINECA Galileo 100 (48-core Intel CascadeLake):
+The following benchmark timings were collected on the CINECA Galileo 100 (Intel CascadeLake nodes) using **8 OpenMP threads** across different batch sizes to compare overhead:
 
-| Dataset | Size | Lines | Wall Time | Throughput |
-| :--- | :--- | :--- | :--- | :--- |
-| small | 430 KB | ~7K | <!-- TODO: fill after benchmarking --> | <!-- TODO --> |
-| medium | 4.3 MB | ~70K | <!-- TODO --> | <!-- TODO --> |
-| large | 43 MB | ~700K | <!-- TODO --> | <!-- TODO --> |
-
-<!-- TODO: Fill in after running benchmarks on G100 -->
+| Dataset | Size | Lines | Batch Size | Wall Time | Throughput |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **small** | 430 KB | ~7K | 500 | 23 ms | 0.601840 Mrows/s |
+| | | | 1,000 | 138 ms | 0.428036 Mrows/s |
+| **medium** | 4.3 MB | ~70K | 5,000 | 202 ms | 1.025890 Mrows/s |
+| | | | 10,000 | 205 ms | 1.134030 Mrows/s |
+| **large** | 43 MB | ~700K | 50,000 | 783 ms | 1.391560 Mrows/s |
+| | | | 100,000 | 834 ms | 1.391560 Mrows/s |
 
 ---
 
@@ -220,49 +231,45 @@ The test suite covers the following areas:
 
 ## 🚀 CI/CD Pipeline
 
-<!-- TODO: Describe pipeline after implementing .github/workflows/ -->
+The pipeline is configured in `.github/workflows/` and automates the verification and deployment lifecycle using two main workflows:
 
-The pipeline is configured in `.github/workflows/` and automates:
+1. **Pull Request Verification (`CI_testing.yaml`)**
+   - **Trigger**: Runs on any pull request opened, updated, or reopened against the `main` branch.
+   - **Environment**: Ubuntu environment with dependencies installed: `build-essential`, `cmake`, and `libomp-dev`.
+   - **Execution**:
+     - Configures and compiles the project with CMake in Release mode with `-DCI=ON`.
+     - Runs the Google Test unit and integration suite using `ctest --output-on-failure`.
+     - Executes an end-to-end integration and metamorphic test runner (`run_e2e_fixture.cmake`) verifying byte-for-byte correctness across varying thread counts and batch sizes.
 
-1. **Build**: Compiles the C++ project with CMake on every push
-2. **Test**: Runs the full test suite (`cmake -DBUILD_TESTS=ON`)
-3. **Container Build**: Builds the Singularity/Apptainer `.sif` image
-4. **HPC Deployment**: Transfers the container to CINECA G100 and submits a SLURM job
-
-Credentials for CINECA access are stored as GitHub Secrets (never hard-coded).
+2. **Apptainer Image Build & HPC Deployment (`build-apptainer.yml`)**
+   - **Trigger**: Runs on pushes to `main` or via manual triggers.
+   - **Build**: Compiles the Apptainer container image `astralog.sif` from `Singularity.def` using a setup action on an Ubuntu runner.
+   - **HPC Deployment**: Deploys the built `.sif` image, along with `job.sh` and inputs, to the CINECA Galileo 100 cluster via `scp` using SSH keys and certificates stored in GitHub Secrets. It then triggers `ssh` to load the container execution module and submit the SLURM job via `sbatch job.sh`.
 
 ---
 
 ## 🧗 Difficulties Faced
 
-<!-- TODO: Expand with actual experiences -->
-
 ### Overcome
 
 1. **Per-timestamp output semantics**: The spec requires a single aggregated NOMINAL line per timestamp with *all* sensor values, but only if *zero* rules fire. This required redesigning the pipeline from per-record to per-timestamp processing, introducing the `TimestampGroup` data structure and a two-pass approach (evaluate → decide).
+2. **Parallelization with stateful and step-diff rules**: Stateful and step-diff rules require per-sensor sequential processing, but naively serializing the entire pipeline wastes cores. The solution was to parallelize *across sensors* while processing each sensor's timeline sequentially within a thread.
+3. **CINECA Certificate Authentication in CI**: Setting up automated SCP/SSH connections to Galileo 100 required injecting transient SSH user certificates. We resolved this by configuring dynamic key-writing steps within GitHub Actions.
+4. **Decoupled Evaluation of Correlation Rules**: Correlation rules cannot be evaluated in isolation or in parallel with single-sensor rules because they depend on the evaluation results of other rules (sub-rules) at the same timestamp. To resolve this, we decoupled the processing: Phase 3 evaluates single-sensor rules in parallel, while Phase 4 sequentially walks the accumulated violations to evaluate the logical AND/OR conditions of the correlation rules. We also designed a custom [RuleViolation](src/types.hpp#L199-L252) structure to aggregate multiple sub-rule violations without causing heap allocation overhead for single-sensor rules in the common path.
 
-2. **Step-diff rule semantics**: The original implementation used `std::abs()` on the delta, which prevented detection of directional changes (e.g., drops). Reading the spec example carefully (`operator: "<", value: -2.0`) revealed that the signed delta must be compared directly.
 
-3. **Parallelization with stateful rules**: Stateful and step-diff rules require per-sensor sequential processing, but naively serializing the entire pipeline wastes cores. The solution was to parallelize *across sensors* while processing each sensor's timeline sequentially within a thread.
+### Persistent Challenges
 
-4. **Output format compliance**: Getting the exact separator format right (semicolon `";"` for fields, comma `","` for correlation multi-values, pipe `"|"` for sensor aggregation) required careful attention to the spec examples.
-
-### Ongoing / Not Yet Resolved
-
-<!-- TODO: Document any unresolved issues -->
+1. **Limited Sensor-Level Parallelism**: Because the parallelization of rule evaluation (Phase 3) is done at the sensor level, the maximum degree of parallelism is strictly dictated by the number of sensors on the spacecraft (e.g., 12 in the current dataset). Consequently, when executing on high-performance computing nodes with high core counts (such as Galileo 100 with 48 cores), many CPU cores remain idle during this phase, limiting the scaling potential.
 
 ---
 
 ## 🤖 Usage of Generative AI
 
-<!-- TODO: Fill in with actual GenAI usage details before submission -->
+During this project, we utilized Generative AI to assist in **Supervised Code Generation** and **AI integration with GitHub Workflows**:
 
-During this project, we used the following Generative AI tools:
-
-- **Tool(s) used**: <!-- e.g., ChatGPT, GitHub Copilot, Claude, Gemini -->
-- **Inputs provided**: <!-- e.g., prompts describing the desired functionality, code snippets for review -->
-- **Outputs obtained**: <!-- e.g., code suggestions, architecture advice, debugging help -->
-- **Verification & integration**: <!-- e.g., manually reviewed all generated code, tested for correctness, adapted to our architecture -->
+- **Supervised Code Generation**: Assisted in drafting lightweight custom YAML and JSON parsers, optimizing OpenMP loops, and writing unit test templates.
+- **AI integration with GitHub Workflows**: Assisted in building the CI testing pipeline and integrating AI for automated code review and issue review.
 
 All AI-generated outputs were critically reviewed, tested, and adapted to ensure correctness and alignment with our architectural design. We take full responsibility for every line of code and documentation in this repository.
 
@@ -306,14 +313,6 @@ sbatch --export=ALL,BENCHMARK=0 job.sh
 sbatch --export=ALL,CSV_PATH=input/telemetry/export_sat_alpha_large.csv,BATCH_SIZE=100000 job.sh
 ```
 
-Telemetry files with repeated timestamps can be preprocessed with:
-
-```bash
-cd input/telemetry
-bash fix.sh export_sat_alpha_small.csv
-cd ../..
-CSV_PATH=input/telemetry/export_sat_alpha_small_fixed.csv ./build_and_run.sh --benchmark
-```
 
 ### Run
 
@@ -344,6 +343,18 @@ CSV_PATH=input/telemetry/export_sat_alpha_small_fixed.csv ./build_and_run.sh --b
 - `output/valid_data.csv` — NOMINAL timestamps (all sensors, pipe-separated)
 - `output/alarms.log` — Rule violations (one line per violated rule)
 - `output/batches/` — Batch audit files (one `.txt` per flushed batch, unless `--benchmark` is enabled)
+
+### Doxygen Documentation
+
+API documentation can be generated locally using Doxygen and Graphviz (for class/caller/call diagrams):
+
+```bash
+doxygen Doxyfile
+```
+
+Once generated, open `html/index.html` in your web browser to browse the interactive class hierarchies, call graphs, and caller graphs.
+
+Alternatively, a pre-compiled PDF version of the Doxygen documentation is available at [docs/doxygen_latex__1_.pdf](docs/doxygen_latex__1_.pdf).
 
 ---
 

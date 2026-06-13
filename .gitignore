@@ -4,3 +4,6 @@ build
 output
 
 *.sif
+
+html/
+latex/
